@@ -1,0 +1,123 @@
+MARTIAN VORTEX DETECTION - GLOSSARY OF TERMS
+=========================================
+
+1. TIME SERIES ANALYSIS
+----------------------
+Definition: Analysis method that examines data points collected over time in sequential order
+In our context: Analyzing pressure readings as a sequence to detect patterns before, during, and after vortex events
+Key aspect: Considers the temporal relationship between data points, not just individual values
+Example: Looking at 50 samples before a vortex to identify characteristic patterns
+
+2. LOGISTIC REGRESSION
+--------------------
+Definition: Statistical model that predicts binary outcomes (yes/no, 0/1)
+In our context: Predicts vortex/no-vortex based on pressure features
+Key characteristics:
+* Uses probability to make predictions (0 to 1)
+* Linear decision boundary
+* Relatively simple and interpretable
+Limitation: May not capture complex non-linear patterns in the data
+
+3. RANDOM FOREST
+---------------
+Definition: Ensemble learning method using multiple decision trees
+Key characteristics:
+* Combines many decision trees
+* Each tree votes on the final prediction
+* Uses random subsets of features and data
+Advantages:
+* Handles non-linear relationships
+* Less prone to overfitting
+* Provides feature importance scores
+
+4. RANDOM FOREST AND CLASS BALANCE
+--------------------------------
+Random Forests handle imbalanced data better than many algorithms because:
+* They can be weighted to account for class imbalance
+* They use bootstrapped samples (random sampling with replacement)
+* They optimize for overall accuracy by default
+In our case: Performed well without explicit balancing techniques
+Note: Still affected by extreme imbalance (286.84:1 ratio)
+
+5. OUR TIME SERIES MODEL TYPE
+----------------------------
+Type: Random Forest Classifier with temporal features
+Not an LSTM or RNN, but rather:
+* Uses engineered features from time windows
+* Captures temporal patterns through feature design
+* More computationally efficient than deep learning approaches
+Features include: means, trends, variability over time windows
+
+6. PRECISION
+-----------
+Definition: Proportion of correct positive predictions among all positive predictions
+Formula: True Positives / (True Positives + False Positives)
+In our context: Of all predicted vortices, what percentage were actual vortices
+Example: 0.900 precision means 90% of vortex predictions were correct
+
+7. RECALL
+--------
+Definition: Proportion of actual positives correctly identified
+Formula: True Positives / (True Positives + False Negatives)
+In our context: What percentage of actual vortices were detected
+Example: 0.750 recall means 75% of actual vortices were detected
+
+8. F1-SCORE
+----------
+Definition: Harmonic mean of precision and recall
+Formula: 2 * (Precision * Recall) / (Precision + Recall)
+Purpose: Balances precision and recall in a single metric
+In our context: Overall measure of model performance
+
+9. ENERGY SAVED
+--------------
+Definition: Percentage of time the system can operate in low-power mode
+Formula: (Total Samples - Predicted Vortices) / Total Samples
+In our context: How often sensors can remain in low-power state
+Example: 57.47% means sensors can be in low-power mode 57.47% of the time
+
+10. DATA QUALITY
+--------------
+Definition: Percentage of actual vortices captured by the model
+Similar to recall but focused on data collection perspective
+In our context: Measures completeness of vortex event data
+Example: 75.02% means we capture data for 75.02% of actual vortices
+
+11. ROC CURVES
+-------------
+Definition: Receiver Operating Characteristic curve
+Plots: True Positive Rate vs False Positive Rate
+Purpose: Shows model performance across different thresholds
+Key metric: Area Under Curve (AUC) - higher is better
+
+12. CONFUSION MATRICES
+--------------------
+Definition: Table showing prediction results vs actual values
+Components:
+* True Positives (TP): Correctly predicted vortices
+* True Negatives (TN): Correctly predicted non-vortices
+* False Positives (FP): Incorrectly predicted vortices
+* False Negatives (FN): Missed vortices
+Purpose: Detailed view of model performance
+
+13. FEATURE IMPORTANCE PLOTS
+--------------------------
+Definition: Visualizations showing relative importance of each feature
+In our context: Shows which temporal features best predict vortices
+Examples of important features:
+* Mean pressure change
+* Pressure variability
+* Maximum pressure drop
+Purpose: Helps understand which features drive predictions
+
+ADDITIONAL NOTES
+---------------
+- These terms are interconnected in our analysis
+- The two-model approach (Balanced vs Energy-Conservative) uses these metrics differently:
+  * Balanced Model: Optimizes for F1-score
+  * Energy-Conservative Model: Optimizes for precision and energy savings
+- Understanding these terms helps in:
+  * Model selection
+  * Performance evaluation
+  * System optimization
+  * Communication with stakeholders 
