@@ -110,6 +110,35 @@ Examples of important features:
 * Maximum pressure drop
 Purpose: Helps understand which features drive predictions
 
+Model Comparison Terms:
+----------------------
+Balanced Model: A model trained on an artificially balanced dataset where the number of samples for each class is equal. In our case, equal numbers of detection and non-detection windows.
+
+Weighted Model: A model trained on naturally imbalanced data using class weights to handle the imbalance. In our case, using the actual distribution of detection and non-detection windows.
+
+Class Distribution: The proportion of samples belonging to each class in a dataset. Can be balanced (equal proportions) or imbalanced (unequal proportions).
+
+Performance Metrics:
+-------------------
+Precision: The ratio of true positive predictions to all positive predictions made by the model.
+Recall: The ratio of true positive predictions to all actual positive cases in the data.
+F1-Score: The harmonic mean of precision and recall, providing a balanced measure of model performance.
+Data Quality: A measure of the reliability and accuracy of the model's predictions.
+
+Error Analysis Terms:
+--------------------
+False Positives: Cases where the model incorrectly predicts a vortex when there isn't one.
+False Negatives: Cases where the model fails to detect a vortex that is actually present.
+Pressure Variability: A measure of how much pressure values fluctuate in a given window.
+Max Pressure Drop: The largest decrease in pressure observed in a detection window.
+Number of Drops: The count of significant pressure decreases in a detection window.
+
+Visualization Terms:
+-------------------
+Bar Chart: A graphical representation using rectangular bars to show comparisons between categories.
+Pie Chart: A circular statistical graphic divided into slices to show numerical proportions.
+Error Bars: Lines extending from bars or points to indicate the uncertainty or standard deviation of a measurement.
+
 ADDITIONAL NOTES
 ---------------
 - These terms are interconnected in our analysis
