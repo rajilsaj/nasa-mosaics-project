@@ -1,0 +1,2 @@
+total_samples,true_vortices,predicted_vortices,true_positives,false_positives,false_negatives,precision,recall,f1_score,energy_saved,data_quality,fp_avg_prob,fn_avg_prob
+718024,3318,1726,126,1600,3192,0.07300115874855156,0.0379746835443038,0.0499603489294211,0.9975961806290597,0.0379746835443038,0.2299996559431487,0.018393617430139557
