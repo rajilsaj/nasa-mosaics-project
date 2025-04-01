@@ -42,11 +42,17 @@ def prepare_features(data: pd.DataFrame, data_dir: str, force_recalculate: bool 
         X = processor.prepare_features(data, force_recalculate)
         print("Features prepared successfully")
         
-        # Generate labels looking ahead 10 samples, matching backup model
-        y = np.zeros(len(X))
-        for i in range(len(X)):
-            if i + 10 <= len(data):
-                y[i] = 1 if any(data['gt_detection_win'].iloc[i:i+10] == 1) else 0
+        # Generate labels looking ahead 10 samples using vectorized operations
+        n_samples = len(X)
+        y = np.zeros(n_samples)
+        
+        # Create a matrix of future windows for vectorized label generation
+        future_windows = np.zeros((n_samples, 10), dtype=bool)
+        for i in range(10):
+            future_windows[:, i] = data['gt_detection_win'].iloc[i:i+n_samples].values == 1
+        
+        # Label is 1 if any of the next 10 samples contain a vortex
+        y = np.any(future_windows, axis=1).astype(int)
         print("Labels generated successfully")
         return X, y
     except Exception as e:
