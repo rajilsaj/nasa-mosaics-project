@@ -39,39 +39,43 @@ class FeatureProcessor:
             raise ValueError(f"Data must have at least {min_samples} samples (window_size + 1)")
     
     def calculate_features(self, data: pd.DataFrame) -> np.ndarray:
-        """Calculate the 10 features we actually use."""
+        """Calculate the 10 features using vectorized operations."""
         # Calculate pressure difference first
         pressure_diff = data['PRESSURE'] - data['PRESSURE_MA_500']
         
-        # Create sliding window features
+        # Create sliding window features using numpy's stride_tricks
         window_size = 50
-        features = []
+        n_samples = len(pressure_diff) - window_size + 1
         
-        # Initialize the first window
-        current_window = pressure_diff.iloc[0:window_size].values
+        # Create windows using stride_tricks for memory efficiency
+        from numpy.lib.stride_tricks import sliding_window_view
+        windows = sliding_window_view(pressure_diff.values, window_size)
         
-        # Slide the window through the data
-        for i in range(window_size, len(data)):
-            # Update window by removing oldest sample and adding newest
-            # Shift values right by 1 (oldest values stay on left)
-            current_window = np.roll(current_window, 1)
-            current_window[0] = pressure_diff.iloc[i]
-            
-            # Calculate features in the same order as backup model
-            features.append([
-                np.mean(current_window),  # Mean pressure
-                np.std(current_window),   # Pressure variability
-                np.min(current_window),   # Minimum pressure
-                np.max(current_window),   # Maximum pressure
-                np.mean(np.diff(current_window)),  # Average rate of change
-                np.std(np.diff(current_window)),   # Rate of change variability
-                np.mean(current_window[-10:]),     # Recent pressure mean
-                np.std(current_window[-10:]),      # Recent pressure variability
-                np.mean(np.diff(current_window[-10:])),  # Recent rate of change
-                np.std(np.diff(current_window[-10:]))    # Recent rate of change variability
-            ])
+        # Calculate all features at once using vectorized operations
+        features = np.zeros((n_samples, 10))
         
-        return np.array(features)
+        # Window-wide features
+        features[:, 0] = np.mean(windows, axis=1)  # Mean pressure
+        features[:, 1] = np.std(windows, axis=1)   # Pressure variability
+        features[:, 2] = np.min(windows, axis=1)   # Minimum pressure
+        features[:, 3] = np.max(windows, axis=1)   # Maximum pressure
+        
+        # Calculate rate of change for all windows at once
+        window_diffs = np.diff(windows, axis=1)
+        features[:, 4] = np.mean(window_diffs, axis=1)  # Average rate of change
+        features[:, 5] = np.std(window_diffs, axis=1)   # Rate of change variability
+        
+        # Recent features (last 10 samples)
+        recent_windows = windows[:, -10:]
+        features[:, 6] = np.mean(recent_windows, axis=1)  # Recent pressure mean
+        features[:, 7] = np.std(recent_windows, axis=1)   # Recent pressure variability
+        
+        # Recent rate of change features
+        recent_diffs = np.diff(recent_windows, axis=1)
+        features[:, 8] = np.mean(recent_diffs, axis=1)  # Recent rate of change
+        features[:, 9] = np.std(recent_diffs, axis=1)   # Recent rate of change variability
+        
+        return features
     
     def _validate_cache_consistency(self, cached_data: np.ndarray, current_data: pd.DataFrame) -> bool:
         """Validate that cached features are consistent with current data."""
