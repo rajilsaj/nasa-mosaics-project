@@ -47,28 +47,35 @@ class FeatureProcessor:
         window_size = 50
         features = []
         
+        # Initialize the first window
+        current_window = pressure_diff.iloc[0:window_size].values
+        
+        # Slide the window through the data
         for i in range(window_size, len(data)):
-            window = pressure_diff.iloc[i-window_size:i]
+            # Update window by removing oldest sample and adding newest
+            # Shift values right by 1 (oldest values stay on left)
+            current_window = np.roll(current_window, 1)
+            current_window[0] = pressure_diff.iloc[i]
             
-            # Calculate the 10 features in the same order as FEATURE_NAMES
+            # Calculate features in the same order as backup model
             features.append([
-                np.mean(window[-10:]),     # Recent Pressure Mean
-                np.mean(np.diff(window[-10:])),  # Recent Rate of Change
-                np.std(window),            # Pressure Variability
-                np.mean(np.diff(window)),  # Average Rate of Change
-                np.std(window[-10:]),      # Recent Pressure Variability
-                np.std(np.diff(window)),   # Rate of Change Variability
-                np.std(np.diff(window[-10:])),  # Recent Rate of Change Variability
-                np.mean(window),           # Mean Pressure
-                np.min(window),            # Min Pressure
-                np.max(window)             # Max Pressure
+                np.mean(current_window),  # Mean pressure
+                np.std(current_window),   # Pressure variability
+                np.min(current_window),   # Minimum pressure
+                np.max(current_window),   # Maximum pressure
+                np.mean(np.diff(current_window)),  # Average rate of change
+                np.std(np.diff(current_window)),   # Rate of change variability
+                np.mean(current_window[-10:]),     # Recent pressure mean
+                np.std(current_window[-10:]),      # Recent pressure variability
+                np.mean(np.diff(current_window[-10:])),  # Recent rate of change
+                np.std(np.diff(current_window[-10:]))    # Recent rate of change variability
             ])
         
         return np.array(features)
     
-    def _validate_cache_consistency(self, cached_data: np.ndarray, 
-                                  current_data: pd.DataFrame) -> bool:
+    def _validate_cache_consistency(self, cached_data: np.ndarray, current_data: pd.DataFrame) -> bool:
         """Validate that cached features are consistent with current data."""
+        print(f"Cache validation: cached_data length={len(cached_data)}, current_data length={len(current_data)}, window_size=50")
         if len(cached_data) != len(current_data) - 50:  # Account for window size
             return False
         return True
@@ -89,6 +96,7 @@ class FeatureProcessor:
             if not force_recalculate and self.features_path.exists():
                 print("Loading preprocessed features...")
                 cached_data = joblib.load(self.features_path)
+                print(f"Loaded cache: shape={cached_data.shape}, current data length={len(data)}")
                 
                 # Validate cache consistency
                 if not self._validate_cache_consistency(cached_data, data):
