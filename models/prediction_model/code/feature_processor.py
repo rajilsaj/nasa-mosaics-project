@@ -99,12 +99,15 @@ class FeatureProcessor:
                 print(f"Loaded cache: shape={cached_data.shape}, current data length={len(data)}")
                 
                 # Validate cache consistency
+                print("Validating cache consistency...")
                 if not self._validate_cache_consistency(cached_data, data):
                     print("Cache validation failed, recalculating features...")
                     force_recalculate = True
                 else:
+                    print("Cache validation passed, using cached features...")
                     self.features = cached_data
                     self.full_data = data
+                    print("Returning cached features...")
                     return self._get_slice(data)
             
             if force_recalculate:
