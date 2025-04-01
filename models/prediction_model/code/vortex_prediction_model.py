@@ -40,12 +40,14 @@ def prepare_features(data: pd.DataFrame, data_dir: str, force_recalculate: bool 
     try:
         processor = FeatureProcessor(data_dir)
         X = processor.prepare_features(data, force_recalculate)
+        print("Features prepared successfully")
         
         # Generate labels looking ahead 10 samples, matching backup model
         y = np.zeros(len(X))
         for i in range(len(X)):
             if i + 10 <= len(data):
                 y[i] = 1 if any(data['gt_detection_win'].iloc[i:i+10] == 1) else 0
+        print("Labels generated successfully")
         return X, y
     except Exception as e:
         print(f"Error preparing features: {str(e)}")
