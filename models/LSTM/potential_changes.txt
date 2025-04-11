@@ -1,0 +1,13 @@
+simple moving average of differences
+Relative pressure change
+Threshold-based differences
+Normalized raw pressure
+hybrid approach
+Balance training data but keep sequential unbalanced data for validation and testing
+
+
+
+Fixing the data splitting to maintain temporal order
+Enhancing the model architecture
+Aligning the evaluation metrics
+Adding data distribution checks
