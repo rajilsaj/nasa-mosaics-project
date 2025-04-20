@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 import argparse
 import matplotlib.pyplot as plt
+import joblib
 print("Using GPU:", tf.config.list_physical_devices('GPU'))
 mixed_precision.set_global_policy("mixed_float16")
 
@@ -29,6 +30,22 @@ class VortexLSTMModel:
         self.window_size = window_size
         self.scaler = StandardScaler()
         self.model = None
+        
+    def save_model_and_scaler(self, model_path: Path):
+        """Save both the model and scaler."""
+        # Save the model
+        self.model.save(model_path)
+        # Save the scaler
+        scaler_path = model_path.parent / f"{model_path.stem}_scaler.joblib"
+        joblib.dump(self.scaler, scaler_path)
+        
+    def load_model_and_scaler(self, model_path: Path):
+        """Load both the model and scaler."""
+        # Load the model
+        self.model = tf.keras.models.load_model(model_path)
+        # Load the scaler
+        scaler_path = model_path.parent / f"{model_path.stem}_scaler.joblib"
+        self.scaler = joblib.load(scaler_path)
         
     def prepare_sequences_from_windows(self, data: pd.DataFrame, windows: list) -> tuple:
         """Prepare sequences from detection windows."""
@@ -321,9 +338,9 @@ def main():
     
     # Train or load model
     if model_path.exists() and not args.retrain:
-        print("\nLoading existing model...")
-        model.model = tf.keras.models.load_model(model_path)
-        print("Model loaded successfully")
+        print("\nLoading existing model and scaler...")
+        model.load_model_and_scaler(model_path)
+        print("Model and scaler loaded successfully")
     else:
         if args.retrain:
             print("\nForce retrain flag set. Training new model...")
@@ -334,10 +351,10 @@ def main():
         print("\nTraining LSTM model...")
         history = model.train(X_train, y_train, X_val, y_val, epochs=30, batch_size=128)
         
-        # Save model
+        # Save model and scaler
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        model.model.save(model_path)
-        print(f"\nModel saved to: {model_path}")
+        model.save_model_and_scaler(model_path)
+        print(f"\nModel and scaler saved to: {model_path}")
     
     # Evaluate model
     print("\nEvaluating model...")
