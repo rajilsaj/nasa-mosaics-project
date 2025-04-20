@@ -54,16 +54,16 @@ def visualize_model_metrics(model, X_test, y_test, y_pred, y_pred_proba, model_n
     
     # 2. ROC Curve
     plt.figure(figsize=(8, 6))
-    fpr, tpr, _ = roc_curve(y_test, y_pred_proba[:, 1])
-    roc_auc = auc(fpr, tpr)
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
+    if len(y_pred_proba.shape) > 1 and y_pred_proba.shape[1] > 1:
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba[:, 1])
+    else:
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+    plt.plot(fpr, tpr, label=f'ROC Curve (AUC = {auc(fpr, tpr):.4f})')
+    plt.plot([0, 1], [0, 1], 'k--')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title(f'ROC Curve - {model_name}')
-    plt.legend(loc="lower right")
+    plt.title('ROC Curve')
+    plt.legend()
     plt.tight_layout()
     plt.savefig(save_dir / 'roc_curve.png')
     plt.close()
@@ -107,7 +107,7 @@ def visualize_model_metrics(model, X_test, y_test, y_pred, y_pred_proba, model_n
         'Precision': precision_score(y_test, y_pred),
         'Recall': recall_score(y_test, y_pred),
         'F1-Score': f1_score(y_test, y_pred),
-        'AUC': roc_auc
+        'AUC': auc(fpr, tpr)
     }
     
     plt.figure(figsize=(8, 6))
