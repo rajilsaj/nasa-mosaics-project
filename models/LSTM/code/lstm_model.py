@@ -5,14 +5,17 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras import mixed_precision
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 from pathlib import Path
 import time
 import argparse
 import matplotlib.pyplot as plt
 import joblib
+import tensorflow.keras.backend as K
+from tensorflow.keras.regularizers import l2
+import gc
 print("Using GPU:", tf.config.list_physical_devices('GPU'))
 mixed_precision.set_global_policy("mixed_float16")
 
@@ -23,158 +26,196 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent / 'utils'))
 from visualize_lstm_metrics import visualize_lstm_metrics, create_lstm_report
 
 class VortexLSTMModel:
-    """LSTM model for vortex prediction."""
+    """Single-stage LSTM model for vortex prediction."""
     
-    def __init__(self, window_size: int = 100):
+    def __init__(self, window_size: int = 60, prediction_threshold: float = 0.2):
         """Initialize the LSTM model."""
         self.window_size = window_size
-        self.scaler = StandardScaler()
+        self.prediction_threshold = prediction_threshold
         self.model = None
         
-    def save_model_and_scaler(self, model_path: Path):
-        """Save both the model and scaler."""
-        # Save the model
-        self.model.save(model_path)
-        # Save the scaler
-        scaler_path = model_path.parent / f"{model_path.stem}_scaler.joblib"
-        joblib.dump(self.scaler, scaler_path)
-        
-    def load_model_and_scaler(self, model_path: Path):
-        """Load both the model and scaler."""
-        # Load the model
-        self.model = tf.keras.models.load_model(model_path)
-        # Load the scaler
-        scaler_path = model_path.parent / f"{model_path.stem}_scaler.joblib"
-        self.scaler = joblib.load(scaler_path)
-        
-    def prepare_sequences_from_windows(self, data: pd.DataFrame, windows: list) -> tuple:
-        """Prepare sequences from detection windows."""
-        sequences = []
-        labels = []
-        sequence_info = []  # Store diagnostic information
-        
-        # Get pressure differences
+    def prepare_sequences(self, data: pd.DataFrame) -> tuple:
+        """Prepare sequences for vortex prediction."""
         pressure_values = data['PRESSURE'].values
-        pressure_diff = np.diff(pressure_values, prepend=pressure_values[0])
+        n_sequences = len(data) - self.window_size + 1
         
-        # Process detection windows
-        for start, end in windows:
-            # Get the detection window data
-            window_data = data.iloc[start:end]
+        # Process in smaller chunks to manage memory
+        chunk_size = 50000
+        n_chunks = (n_sequences + chunk_size - 1) // chunk_size
+        
+        sequences_list = []
+        labels_list = []
+        
+        for chunk_idx in range(n_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min((chunk_idx + 1) * chunk_size, n_sequences)
             
-            # Create one sequence per window, using fixed window_size
-            if end - start >= self.window_size:
-                sequence = pressure_diff[end-self.window_size:end]
-                sequences.append(sequence.reshape(-1, 1))
-                labels.append(1)  # This is a vortex sequence
-                
-                # Store diagnostic info for vortex sequence
-                sequence_info.append({
-                    'type': 'vortex',
-                    'start': end-self.window_size,
-                    'end': end,
-                    'pressure_range': (window_data['PRESSURE'].min(), window_data['PRESSURE'].max()),
-                    'pressure_diff_range': (sequence.min(), sequence.max())
-                })
-                
-                # Get non-vortex sequence from before this window
-                non_vortex_start = max(0, start - self.window_size)
-                non_vortex_sequence = pressure_diff[non_vortex_start:start]
-                
-                if len(non_vortex_sequence) == self.window_size:
-                    sequences.append(non_vortex_sequence.reshape(-1, 1))
-                    labels.append(0)  # This is a non-vortex sequence
-                    
-                    # Store diagnostic info for non-vortex sequence
-                    sequence_info.append({
-                        'type': 'non_vortex',
-                        'start': non_vortex_start,
-                        'end': start,
-                        'pressure_range': (data.iloc[non_vortex_start:start]['PRESSURE'].min(), 
-                                         data.iloc[non_vortex_start:start]['PRESSURE'].max()),
-                        'pressure_diff_range': (non_vortex_sequence.min(), non_vortex_sequence.max())
-                    })
+            # Create sequences for this chunk
+            pressure_chunk = np.lib.stride_tricks.sliding_window_view(
+                pressure_values[start_idx:start_idx + self.window_size + end_idx - start_idx - 1],
+                self.window_size
+            )
+            
+            # Create sequences array for this chunk
+            chunk_sequences = np.zeros((end_idx - start_idx, self.window_size, 1))
+            chunk_sequences[:, :, 0] = pressure_chunk
+            
+            # Get labels for this chunk
+            chunk_labels = data.iloc[start_idx + self.window_size - 1:end_idx + self.window_size - 1]['gt_detection_win'].values
+            
+            sequences_list.append(chunk_sequences)
+            labels_list.append(chunk_labels)
+            
+            # Clear memory
+            del pressure_chunk, chunk_sequences
+            gc.collect()
         
-        return np.array(sequences), np.array(labels), sequence_info
+        # Combine all chunks
+        sequences = np.concatenate(sequences_list, axis=0)
+        labels = np.concatenate(labels_list, axis=0)
+        
+        return sequences, labels
+        
+    def focal_loss(self, gamma=2.0, alpha=0.95):
+        def focal_loss_fixed(y_true, y_pred):
+            y_true = tf.cast(y_true, tf.float32)
+            epsilon = 1e-7
+            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
+            
+            pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
+            pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
+            
+            loss_1 = -alpha * tf.pow(1. - pt_1, gamma) * tf.math.log(pt_1)
+            loss_0 = -(1 - alpha) * tf.pow(pt_0, gamma) * tf.math.log(1. - pt_0)
+            
+            return tf.reduce_mean(loss_1 + loss_0)
+        return focal_loss_fixed
     
-    def build_model(self, input_shape: tuple):
-        """Build the LSTM model."""
+    def calculate_alpha(self, y_train: np.ndarray) -> float:
+        """Calculate alpha for focal loss based on class distribution."""
+        n_positive = np.sum(y_train == 1)
+        n_negative = np.sum(y_train == 0)
+        total = n_positive + n_negative
+        
+        # Alpha is the inverse of the positive class frequency
+        alpha = n_negative / total
+        
+        print(f"\nClass distribution for alpha calculation:")
+        print(f"Positive examples (vortices): {n_positive}")
+        print(f"Negative examples (non-vortices): {n_negative}")
+        print(f"Calculated alpha: {alpha:.4f}")
+        
+        return alpha
+    
+    def build_model(self, input_shape: tuple, alpha: float = None):
+        """Build the vortex prediction model."""
         model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=input_shape),
-            Dropout(0.2),
-            LSTM(32),
-            Dropout(0.2),
+            LSTM(64,
+                 kernel_regularizer=l2(0.001),
+                 recurrent_regularizer=l2(0.001),
+                 return_sequences=True,
+                 input_shape=input_shape),
+            LSTM(32,
+                 kernel_regularizer=l2(0.001),
+                 recurrent_regularizer=l2(0.001)),
             Dense(16, activation='relu'),
+            Dropout(0.3),
             Dense(1, activation='sigmoid')
         ])
         
         model.compile(
-            optimizer='adam',
-            loss='binary_crossentropy',
-            metrics=['accuracy', tf.keras.metrics.AUC(curve='PR')]
+            optimizer=Adam(learning_rate=0.001),
+            loss=self.focal_loss(gamma=2.0, alpha=alpha),
+            metrics=['accuracy', 
+                    tf.keras.metrics.AUC(curve='ROC', name='roc_auc'),
+                    tf.keras.metrics.AUC(curve='PR', name='pr_auc')]
         )
         
         return model
     
-    def train(self, X_train, y_train, X_val, y_val, epochs=50, batch_size=32):
-        """Train the LSTM model."""
-        # Scale each sequence individually to maintain temporal relationships
-        X_train_scaled = np.zeros_like(X_train)
-        for i in range(X_train.shape[0]):
-            sequence = X_train[i].reshape(-1, 1)
-            scaled_sequence = self.scaler.fit_transform(sequence)
-            X_train_scaled[i] = scaled_sequence.reshape(X_train[i].shape)
+    def train(self, X_train, y_train, X_val, y_val, epochs=50, batch_size=256):
+        """Train the model."""
+        # Print statistics about the data
+        print("\nTraining Data Statistics:")
+        print(f"Total examples: {len(X_train)}")
+        print(f"Vortex examples: {sum(y_train)}")
+        print(f"Non-vortex examples: {len(y_train) - sum(y_train)}")
+        print(f"Ratio: {(len(y_train) - sum(y_train)) / sum(y_train):.2f}:1")
         
-        X_val_scaled = np.zeros_like(X_val)
-        for i in range(X_val.shape[0]):
-            sequence = X_val[i].reshape(-1, 1)
-            scaled_sequence = self.scaler.transform(sequence)
-            X_val_scaled[i] = scaled_sequence.reshape(X_val[i].shape)
+        print("\nValidation Data Statistics:")
+        print(f"Total examples: {len(X_val)}")
+        print(f"Vortex examples: {sum(y_val)}")
+        print(f"Non-vortex examples: {len(y_val) - sum(y_val)}")
+        print(f"Ratio: {(len(y_val) - sum(y_val)) / sum(y_val):.2f}:1")
         
-        # Build model
-        self.model = self.build_model((self.window_size, 1))
+        # Calculate alpha based on class distribution
+        alpha = self.calculate_alpha(y_train)
+        print(f"Alpha: {alpha}")
         
-        # Define callbacks
-        callbacks = [
-            EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
-            ModelCheckpoint('models/lstm/models/lstm_model.h5', monitor='val_loss', save_best_only=True)
-        ]
+        # Train model
+        print("\nTraining vortex prediction model...")
+        self.model = self.build_model((self.window_size, 1), alpha=alpha)
         
-        # Train with class weights
+        # Add learning rate scheduler
+        reduce_lr = ReduceLROnPlateau(
+            monitor='val_pr_auc',
+            factor=0.5,
+            patience=3,
+            min_lr=1e-6,
+            mode='max',
+            verbose=1
+        )
+        
         history = self.model.fit(
-            X_train_scaled, y_train,
-            validation_data=(X_val_scaled, y_val),
+            X_train, y_train,
+            validation_data=(X_val, y_val),
             epochs=epochs,
             batch_size=batch_size,
-            callbacks=callbacks,
-            class_weight={0: 1.0, 1: np.sum(y_train == 0) / np.sum(y_train == 1)}
+            callbacks=[
+                EarlyStopping(monitor='val_pr_auc', patience=5, mode='max'),
+                ModelCheckpoint(
+                    'best_model.h5',
+                    monitor='val_pr_auc',
+                    save_best_only=True,
+                    mode='max'
+                ),
+                reduce_lr
+            ]
         )
         
         return history
     
     def predict(self, X):
-        """Make predictions with the trained model."""
-        X_scaled = self.scaler.transform(X.reshape(-1, X.shape[-1])).reshape(X.shape)
-        return self.model.predict(X_scaled)
+        """Make predictions using the model."""
+        return self.model.predict(X).flatten()
+    
+    def predict_real_time(self, pressure_readings: np.ndarray) -> float:
+        """Make real-time predictions on new pressure readings."""
+        if len(pressure_readings) < self.window_size:
+            raise ValueError(f"Need at least {self.window_size} pressure readings")
+            
+        current_readings = pressure_readings[-self.window_size:]
+        sequence = current_readings.reshape(1, self.window_size, 1)
+        return self.model.predict(sequence)[0][0]
     
     def evaluate(self, X_test, y_test):
         """Evaluate model performance."""
-        X_test_scaled = self.scaler.transform(X_test.reshape(-1, X_test.shape[-1])).reshape(X_test.shape)
-        y_pred_proba = self.model.predict(X_test_scaled)
-        y_pred = (y_pred_proba >= 0.5).astype(int)
+        y_pred_proba = self.predict(X_test)
+        y_pred = (y_pred_proba >= self.prediction_threshold).astype(int)
         
-        # Calculate metrics
-        from sklearn.metrics import precision_score, recall_score, f1_score, average_precision_score
+        from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
         precision = precision_score(y_test, y_pred)
         recall = recall_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred)
-        auc = average_precision_score(y_test, y_pred_proba)  # PR AUC instead of ROC AUC
+        roc_auc = roc_auc_score(y_test, y_pred_proba)
+        pr_auc = average_precision_score(y_test, y_pred_proba)
         
         return {
             'precision': precision,
             'recall': recall,
             'f1': f1,
-            'auc': auc,
+            'roc_auc': roc_auc,
+            'pr_auc': pr_auc,
             'y_pred': y_pred,
             'y_pred_proba': y_pred_proba
         }
@@ -199,11 +240,11 @@ def find_detection_windows(data: pd.DataFrame) -> list:
     return windows
 
 def normalize_pressure(data: pd.DataFrame) -> pd.DataFrame:
-    """Normalize pressure values using min-max scaling."""
+    """Normalize pressure values using Z-score standardization."""
     data = data.copy()
-    min_pressure = data['PRESSURE'].min()
-    max_pressure = data['PRESSURE'].max()
-    data['PRESSURE'] = (data['PRESSURE'] - min_pressure) / (max_pressure - min_pressure)
+    mean_pressure = data['PRESSURE'].mean()
+    std_pressure = data['PRESSURE'].std()
+    data['PRESSURE'] = (data['PRESSURE'] - mean_pressure) / std_pressure
     return data
 
 def plot_confidence_distribution(y_true, y_pred_proba, save_path='confidence_distribution.png'):
@@ -248,6 +289,39 @@ def plot_confidence_timeline(data, y_pred_proba, detection_windows, save_path='c
     plt.savefig(save_path)
     plt.close()
 
+def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame) -> dict:
+    """Evaluate model performance on the full dataset."""
+    print("\nPreparing sequences from full dataset...")
+    X_full, y_full = model.prepare_sequences(data)
+    
+    print("Making predictions on full dataset...")
+    y_pred_proba = model.predict(X_full)
+    y_pred = (y_pred_proba >= model.prediction_threshold).astype(int)
+    
+    from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
+    precision = precision_score(y_full, y_pred)
+    recall = recall_score(y_full, y_pred)
+    f1 = f1_score(y_full, y_pred)
+    roc_auc = roc_auc_score(y_full, y_pred_proba)
+    pr_auc = average_precision_score(y_full, y_pred_proba)
+    
+    # Print class distribution
+    print("\nClass distribution in full dataset:")
+    print(f"Vortex sequences: {sum(y_full)}")
+    print(f"Non-vortex sequences: {len(y_full) - sum(y_full)}")
+    print(f"Ratio: {(len(y_full) - sum(y_full)) / sum(y_full):.2f}:1")
+    
+    return {
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'roc_auc': roc_auc,
+        'pr_auc': pr_auc,
+        'y_pred': y_pred,
+        'y_pred_proba': y_pred_proba,
+        'y_true': y_full
+    }
+
 def main():
     """Main function to train and evaluate the LSTM model."""
     parser = argparse.ArgumentParser(description='Train or evaluate LSTM model')
@@ -263,69 +337,39 @@ def main():
     data = pd.read_csv(data_path)
     print(f"Data loaded in {time.time() - start_time:.2f} seconds")
     
-    # Normalize pressure values
-    print("\nNormalizing pressure values...")
-    data = normalize_pressure(data)
-    print(f"Pressure range after normalization: {data['PRESSURE'].min():.4f} to {data['PRESSURE'].max():.4f}")
+    # Print pressure statistics
+    print("\nPressure Statistics:")
+    print(f"Mean: {data['PRESSURE'].mean():.2f}")
+    print(f"Std: {data['PRESSURE'].std():.2f}")
+    print(f"Min: {data['PRESSURE'].min():.2f}")
+    print(f"Max: {data['PRESSURE'].max():.2f}")
     
-    # Find all detection windows
-    detection_windows = find_detection_windows(data)
-    print(f"Found {len(detection_windows)} detection windows")
+    # Split data temporally (70/15/15)
+    n_samples = len(data)
+    train_end = int(0.7 * n_samples)
+    val_end = int(0.85 * n_samples)
     
-    # Analyze window lengths
-    window_lengths = [end - start for start, end in detection_windows]
-    print("\nDetection window length statistics:")
-    print(f"Min length: {min(window_lengths)}")
-    print(f"Max length: {max(window_lengths)}")
-    print(f"Mean length: {np.mean(window_lengths):.2f}")
-    print(f"Median length: {np.median(window_lengths)}")
-    print(f"Standard deviation: {np.std(window_lengths):.2f}")
+    train_data = data.iloc[:train_end]
+    val_data = data.iloc[train_end:val_end]
+    test_data = data.iloc[val_end:]
     
-    # Plot window length distribution
-    plt.figure(figsize=(10, 6))
-    plt.hist(window_lengths, bins=50)
-    plt.title('Distribution of Detection Window Lengths')
-    plt.xlabel('Window Length (points)')
-    plt.ylabel('Frequency')
-    plt.savefig('detection_window_lengths.png')
-    plt.close()
+    print("\nSplit statistics:")
+    print(f"Training samples: {len(train_data)}")
+    print(f"Validation samples: {len(val_data)}")
+    print(f"Test samples: {len(test_data)}")
     
-    # Split windows into train/val/test
-    train_windows = detection_windows[:int(0.7 * len(detection_windows))]
-    val_windows = detection_windows[int(0.7 * len(detection_windows)):int(0.85 * len(detection_windows))]
-    test_windows = detection_windows[int(0.85 * len(detection_windows)):]
-    
-    # Initialize model with window size matching median detection window length
+    # Initialize model
     model = VortexLSTMModel(window_size=60)
     
     # Prepare sequences for each split
     print("\nPreparing training sequences...")
-    X_train, y_train, train_info = model.prepare_sequences_from_windows(data, train_windows)
+    X_train, y_train = model.prepare_sequences(train_data)
     
     print("\nPreparing validation sequences...")
-    X_val, y_val, val_info = model.prepare_sequences_from_windows(data, val_windows)
+    X_val, y_val = model.prepare_sequences(val_data)
     
     print("\nPreparing test sequences...")
-    X_test, y_test, test_info = model.prepare_sequences_from_windows(data, test_windows)
-    
-    # Print diagnostic information
-    print("\nTraining set characteristics:")
-    train_vortex = [s for s in train_info if s['type'] == 'vortex']
-    train_non_vortex = [s for s in train_info if s['type'] == 'non_vortex']
-    print(f"Vortex sequences: {len(train_vortex)}")
-    print(f"Non-vortex sequences: {len(train_non_vortex)}")
-    print("\nPressure ranges in training set:")
-    print(f"Vortex: {[s['pressure_range'] for s in train_vortex[:5]]}")
-    print(f"Non-vortex: {[s['pressure_range'] for s in train_non_vortex[:5]]}")
-    
-    print("\nValidation set characteristics:")
-    val_vortex = [s for s in val_info if s['type'] == 'vortex']
-    val_non_vortex = [s for s in val_info if s['type'] == 'non_vortex']
-    print(f"Vortex sequences: {len(val_vortex)}")
-    print(f"Non-vortex sequences: {len(val_non_vortex)}")
-    print("\nPressure ranges in validation set:")
-    print(f"Vortex: {[s['pressure_range'] for s in val_vortex[:5]]}")
-    print(f"Non-vortex: {[s['pressure_range'] for s in val_non_vortex[:5]]}")
+    X_test, y_test = model.prepare_sequences(test_data)
     
     # Print class distribution
     print("\nClass distribution in sets:")
@@ -338,9 +382,12 @@ def main():
     
     # Train or load model
     if model_path.exists() and not args.retrain:
-        print("\nLoading existing model and scaler...")
-        model.load_model_and_scaler(model_path)
-        print("Model and scaler loaded successfully")
+        print("\nLoading existing model...")
+        model.model = tf.keras.models.load_model(
+            model_path,
+            custom_objects={'focal_loss_fixed': model.focal_loss()}
+        )
+        print("Model loaded successfully")
     else:
         if args.retrain:
             print("\nForce retrain flag set. Training new model...")
@@ -351,30 +398,34 @@ def main():
         print("\nTraining LSTM model...")
         history = model.train(X_train, y_train, X_val, y_val, epochs=30, batch_size=128)
         
-        # Save model and scaler
+        # Save model
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        model.save_model_and_scaler(model_path)
-        print(f"\nModel and scaler saved to: {model_path}")
+        model.model.save(model_path)
+        print(f"\nModel saved to: {model_path}")
     
-    # Evaluate model
-    print("\nEvaluating model...")
-    results = model.evaluate(X_test, y_test)
+    # Evaluate model on test set
+    print("\nEvaluating model on test set...")
+    test_results = model.evaluate(X_test, y_test)
     
-    # Get predictions and confidence values
-    y_pred_proba = model.model.predict(X_test)
-    
-    # Plot confidence distributions
-    plot_confidence_distribution(y_test, y_pred_proba, 'confidence_distribution.png')
-    
-    # Plot confidence timeline
-    plot_confidence_timeline(data, y_pred_proba, test_windows, 'confidence_timeline.png')
+    # Evaluate model on full dataset
+    print("\nEvaluating model on full dataset...")
+    X_full, y_full = model.prepare_sequences(data)
+    full_results = evaluate_on_full_dataset(model, data)
     
     # Print results
-    print("\nModel Performance:")
-    print(f"Precision: {results['precision']:.4f}")
-    print(f"Recall: {results['recall']:.4f}")
-    print(f"F1-Score: {results['f1']:.4f}")
-    print(f"AUC: {results['auc']:.4f}")
+    print("\nTest Set Performance:")
+    print(f"Precision: {test_results['precision']:.4f}")
+    print(f"Recall: {test_results['recall']:.4f}")
+    print(f"F1-Score: {test_results['f1']:.4f}")
+    print(f"ROC-AUC: {test_results['roc_auc']:.4f}")
+    print(f"PR-AUC: {test_results['pr_auc']:.4f}")
+    
+    print("\nFull Dataset Performance:")
+    print(f"Precision: {full_results['precision']:.4f}")
+    print(f"Recall: {full_results['recall']:.4f}")
+    print(f"F1-Score: {full_results['f1']:.4f}")
+    print(f"ROC-AUC: {full_results['roc_auc']:.4f}")
+    print(f"PR-AUC: {full_results['pr_auc']:.4f}")
     
     # Generate visualizations
     print("\nGenerating visualizations...")
@@ -385,35 +436,46 @@ def main():
         model=model.model,
         X_test=X_test,
         y_test=y_test,
-        y_pred=results['y_pred'],
-        y_pred_proba=results['y_pred_proba'],
-        model_name='LSTM Model',
+        y_pred=test_results['y_pred'],
+        y_pred_proba=test_results['y_pred_proba'],
+        model_name='LSTM Model (Test Set)',
+        save_dir=results_dir
+    )
+    
+    visualize_lstm_metrics(
+        model=model.model,
+        X_test=X_full,
+        y_test=full_results['y_true'],
+        y_pred=full_results['y_pred'],
+        y_pred_proba=full_results['y_pred_proba'],
+        model_name='LSTM Model (Full Dataset)',
         save_dir=results_dir
     )
     
     create_lstm_report('LSTM Model', results_dir)
     
     # Plot training history
-    plt.figure(figsize=(12, 4))
-    
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['loss'], label='Training Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Loss over epochs')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-    plt.title('Accuracy over epochs')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.legend()
-    
-    plt.tight_layout()
-    plt.show()
+    if args.retrain and 'history' in locals():
+        plt.figure(figsize=(12, 4))
+        
+        plt.subplot(1, 2, 1)
+        plt.plot(history.history['loss'], label='Training Loss')
+        plt.plot(history.history['val_loss'], label='Validation Loss')
+        plt.title('Loss over epochs')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        
+        plt.subplot(1, 2, 2)
+        plt.plot(history.history['accuracy'], label='Training Accuracy')
+        plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+        plt.title('Accuracy over epochs')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.show()
     
     print("\nModel training and analysis complete!")
 
