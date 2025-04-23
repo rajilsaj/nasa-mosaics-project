@@ -1,0 +1,19 @@
+Metadata-Version: 2.2
+Name: vortexdetect
+Version: 0.1.0
+Summary: Utilities for vortex detection and analysis in time-series pressure data
+Author: Vembe Sajila Rajil
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: matplotlib
+Requires-Dist: scikit-learn
+Requires-Dist: xgboost
+Requires-Dist: seaborn
+Dynamic: author
+Dynamic: classifier
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
