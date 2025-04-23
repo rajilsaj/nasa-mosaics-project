@@ -1,21 +1,31 @@
+import importlib.util
+import sys
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from xgboost import XGBClassifier
 from sklearn.metrics import (
-    classification_report, confusion_matrix, precision_score, recall_score, f1_score
+    classification_report, confusion_matrix,
+    precision_score, recall_score, f1_score
 )
 
-# === Paths ===
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_PATH = BASE_DIR / "data" / "address.csv"
-RESULTS_DIR = BASE_DIR / "results" / "xgboost"
+# === XGBoost Import Handling ===
+if importlib.util.find_spec("xgboost") is None:
+    print("❌ ERROR: XGBoost is not installed.")
+    print("👉 Please run: pip install xgboost")
+    sys.exit(1)
+else:
+    from xgboost import XGBClassifier
+
+# === Configuration ===
+DATA_PATH = Path("data/address.csv")
+RESULTS_DIR = Path("results/xgboost")
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 FEATURES = [
-    "mean_pressure", "std_pressure", "pressure_change", "pressure_drop_ratio", 
-    "z_score", "scheme1_detection", "scheme2_detection"
+    "mean_pressure", "std_pressure", "pressure_change",
+    "pressure_drop_ratio", "z_score",
+    "scheme1_detection", "scheme2_detection"
 ]
 TARGET = "ml_label"
 
@@ -58,7 +68,7 @@ def evaluate(model, X_test, y_test, threshold=0.5):
         "f1_score": f1_score(y_test, preds, zero_division=0),
     }
 
-    print("\n📊 Classification Report (XGBoost):")
+    print("\n📊 Classification Report:")
     print(classification_report(y_test, preds))
     print("\n🧮 Confusion Matrix:")
     print(confusion_matrix(y_test, preds))
@@ -87,7 +97,7 @@ def tune_threshold(y_true, y_probs):
     return best_thresh, best_f1, thresholds, f1s, precisions, recalls
 
 
-def plot_thresholds(thresholds, f1s, precisions, recalls, best_thresh):
+def plot_thresholds(thresholds, f1s, precisions, recalls, best_thresh, output_dir):
     plt.figure(figsize=(10, 6))
     plt.plot(thresholds, f1s, label="F1 Score", marker="o")
     plt.plot(thresholds, precisions, label="Precision", marker="x")
@@ -99,12 +109,12 @@ def plot_thresholds(thresholds, f1s, precisions, recalls, best_thresh):
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(RESULTS_DIR / "threshold_tuning_xgboost.png")
+    plt.savefig(output_dir / "threshold_tuning_xgboost.png")
     plt.close()
 
 
-def save_metrics(metrics):
-    pd.DataFrame([metrics]).to_csv(RESULTS_DIR / "xgboost_metrics_summary.csv", index=False)
+def save_metrics(metrics, output_dir):
+    pd.DataFrame([metrics]).to_csv(output_dir / "xgboost_metrics_summary.csv", index=False)
 
 
 def main():
@@ -123,8 +133,9 @@ def main():
     print(f"\n✅ Best Threshold: {best_thresh:.2f}, Best F1 Score: {best_f1:.3f}")
 
     print("💾 Saving results...")
-    plot_thresholds(thresholds, f1s, precisions, recalls, best_thresh)
-    save_metrics(base_metrics)
+    plot_thresholds(thresholds, f1s, precisions, recalls, best_thresh, RESULTS_DIR)
+    save_metrics(base_metrics, RESULTS_DIR)
+    print("🎉 Done!")
 
 
 if __name__ == "__main__":

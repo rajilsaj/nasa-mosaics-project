@@ -1,34 +1,30 @@
 import pandas as pd
 import numpy as np
-from pathlib import Path
+import os
 import matplotlib.pyplot as plt
+import argparse
+from pathlib import Path
 from sklearn.metrics import f1_score, precision_score, recall_score
 
-# ==== Config ====
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
-LOG_DIR = BASE_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-
-# Parameters
+# Parameters (defaults)
 DROP_THRESHOLD = 0.01
 Z_SCORE_THRESHOLD = 1.0
 SUB_WINDOW_SIZE = 10
 STEP_SIZE = 1
 
-def load_data(vortex_path: Path, data_path: Path):
+def load_data(vortex_path, data_path):
     vortex_df = pd.read_csv(vortex_path)
     ml_df = pd.read_csv(data_path)
 
     for col in ["SCLK", "PRESSURE", "gt_detection_win", "gt_fwhm"]:
         if col not in ml_df.columns:
-            raise ValueError(f"Missing column '{col}' in ml data.")
+            raise ValueError(f"Missing required column: {col}")
 
     ml_df["gt_detection_win"] = ml_df["gt_detection_win"].astype(bool)
     ml_df["gt_fwhm"] = ml_df["gt_fwhm"].astype(bool)
 
     return vortex_df["SCLK"].tolist(), ml_df
+
 
 def extract_features(sub_window, full_window):
     initial = sub_window["PRESSURE"].iloc[0]
@@ -40,7 +36,9 @@ def extract_features(sub_window, full_window):
     z_score = (initial - final) / std if std != 0 else 0
 
     long_mean = full_window["PRESSURE"].mean()
+    long_std = full_window["PRESSURE"].std()
     ema = full_window["PRESSURE"].ewm(span=max(len(full_window) // 2, 1)).mean().iloc[-1]
+    trend = mean - long_mean
 
     return {
         "mean_pressure": mean,
@@ -51,9 +49,11 @@ def extract_features(sub_window, full_window):
         "scheme1_detection": drop_ratio >= DROP_THRESHOLD,
         "scheme2_detection": z_score >= Z_SCORE_THRESHOLD,
         "long_term_mean": long_mean,
+        "long_term_std": long_std,
         "ema_pressure": ema,
-        "trend": mean - long_mean,
+        "trend": trend,
     }
+
 
 def generate_labeled_windows(vortex_sclk_list, ml_df, fixed_before):
     labeled_rows = []
@@ -91,7 +91,8 @@ def generate_labeled_windows(vortex_sclk_list, ml_df, fixed_before):
 
     return pd.DataFrame(labeled_rows)
 
-def threshold_tuning(labeled_df, output_path: Path, model_name: str):
+
+def threshold_tuning(labeled_df, output_dir, model_name, window_size):
     y_true = labeled_df["ml_label"].astype(int)
     y_scores = labeled_df["pressure_drop_ratio"].values
 
@@ -108,50 +109,55 @@ def threshold_tuning(labeled_df, output_path: Path, model_name: str):
         if f1 > best_f1:
             best_f1, best_thresh = f1, t
 
-    plt.figure(figsize=(10, 6))
+    print(f"\n✅ Best threshold: {best_thresh:.4f}")
+    print(f"F1 Score: {best_f1:.3f}")
+    print(f"Precision: {precisions[np.argmax(f1s)]:.3f}")
+    print(f"Recall: {recalls[np.argmax(f1s)]:.3f}")
+
+    plt.figure()
     plt.plot(thresholds, f1s, label="F1", marker="o")
     plt.plot(thresholds, precisions, label="Precision", marker="x")
     plt.plot(thresholds, recalls, label="Recall", marker="s")
-    plt.axvline(best_thresh, linestyle="--", color="gray", label=f"Best: {best_thresh:.2f}")
+    plt.axvline(best_thresh, linestyle="--", color="gray")
     plt.xlabel("Threshold")
-    plt.ylabel("Score")
-    plt.title(f"Threshold Tuning — {model_name}")
+    plt.ylabel("Metric")
     plt.legend()
     plt.grid(True)
+    plt.title(f"Threshold Tuning - {model_name}")
     plt.tight_layout()
-    fig_path = DATA_DIR / f"threshold_tuning_{model_name.lower().replace(' ', '_')}.png"
-    plt.savefig(fig_path)
+    out_path = Path(output_dir) / f"threshold_tuning_{model_name.lower().replace(' ', '_')}.png"
+    plt.savefig(out_path)
     plt.close()
 
-    # Append threshold to history log
-    with open(LOG_DIR / "threshold_history.csv", "a") as f:
-        f.write(f"{model_name},{fixed_before}\n")
+    # Log the threshold setting
+    log_path = Path("logs") / "threshold_history.csv"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a") as f:
+        f.write(f"{model_name},{window_size}\n")
 
-    print(f"[✓] Best Threshold: {best_thresh:.4f} for {model_name} saved to: {fig_path}")
 
+def main(model_name="Random Forest", window_size=100):
+    vortex_file = Path("data/Jackson_vortex_detections_reformatted_augmented.csv")
+    ml_data_file = Path("data/ml_ready_vortex_data.csv")
+    output_path = Path("data/address.csv")
 
-def main(model_name="Random Forest", window_size=50):
     print("📥 Loading and preparing data...")
-    vortex_file = DATA_DIR / "Jackson_vortex_detections_reformatted_augmented.csv"
-    ml_data_file = DATA_DIR / "ml_ready_vortex_data.csv"
-    output_path = DATA_DIR / "address.csv"
-
     sclk_list, ml_df = load_data(vortex_file, ml_data_file)
 
     print("🧠 Generating labeled windows...")
     labeled_df = generate_labeled_windows(sclk_list, ml_df, fixed_before=window_size)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     labeled_df.to_csv(output_path, index=False)
     print(f"[✓] Saved labeled windows to {output_path} — {len(labeled_df)} rows")
 
     print("📊 Performing threshold tuning...")
-    threshold_tuning(labeled_df, output_path, model_name)
+    threshold_tuning(labeled_df, "data", model_name, window_size)
 
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Random Forest", help="Model name (used for labeling plots)")
-    parser.add_argument("--window", type=int, default=50, help="Window size used in sliding window")
+    parser.add_argument("--model", type=str, default="Random Forest", help="Model name for labeling")
+    parser.add_argument("--window", type=int, default=100, help="Sliding window size")
     args = parser.parse_args()
 
     main(model_name=args.model, window_size=args.window)
