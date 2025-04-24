@@ -1,6 +1,3 @@
-numpy
-pandas
-matplotlib
-scikit-learn
-xgboost
-seaborn
+version https://git-lfs.github.com/spec/v1
+oid sha256:37ee168ed457762605b57f7aa45b18e5ecf5fb6c9f58d6711ae157d7a851aa90
+size 53
