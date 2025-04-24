@@ -1,35 +1,50 @@
 import pandas as pd
 import numpy as np
+from pathlib import Path
 
-# Load data
-df = pd.read_csv('ml_ready_vortex_data.csv')
+# === Configuration ===
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_PATH = BASE_DIR / "data" / "ml_ready_vortex_data.csv"
 
-# Find vortex events (consecutive TRUE values in gt_fwhm)
-vortex_events = df[df['gt_fwhm'] > 0].index
+# === Load Data ===
+if not DATA_PATH.exists():
+    raise FileNotFoundError(f"❌ Dataset not found: {DATA_PATH}")
+
+print(f"📂 Reading data from: {DATA_PATH}")
+df = pd.read_csv(DATA_PATH)
+
+# === Identify Vortex Events ===
+vortex_indices = df[df['gt_fwhm'] > 0].index
 vortex_groups = []
-current_group = [vortex_events[0]]
 
-for i in range(1, len(vortex_events)):
-    if vortex_events[i] - vortex_events[i-1] == 1:
-        current_group.append(vortex_events[i])
-    else:
-        vortex_groups.append(current_group)
-        current_group = [vortex_events[i]]
-vortex_groups.append(current_group)
+if vortex_indices.empty:
+    print("⚠️ No vortex events found in the dataset.")
+else:
+    current_group = [vortex_indices[0]]
+    for i in range(1, len(vortex_indices)):
+        if vortex_indices[i] - vortex_indices[i - 1] == 1:
+            current_group.append(vortex_indices[i])
+        else:
+            vortex_groups.append(current_group)
+            current_group = [vortex_indices[i]]
+    vortex_groups.append(current_group)
 
-print(f"Total number of vortex events: {len(vortex_events)}")
-print(f"Number of unique vortices: {len(vortex_groups)}")
-print("\nFirst 5 vortex groups:")
-for i, group in enumerate(vortex_groups[:5]):
-    print(f"\nVortex {i+1}:")
-    print(f"Start index: {group[0]}")
-    print(f"End index: {group[-1]}")
-    print(f"Duration: {len(group)} samples")
-    print(f"Associated detection windows: {df['gt_detection_win'].iloc[group[0]-10:group[-1]+1].values}")
+    # === Overview ===
+    print(f"\n🌪️ Total vortex samples: {len(vortex_indices)}")
+    print(f"🧩 Number of unique vortex groups: {len(vortex_groups)}")
 
-# Calculate statistics
-durations = [len(group) for group in vortex_groups]
-print(f"\nVortex Statistics:")
-print(f"Average duration: {np.mean(durations):.2f} samples")
-print(f"Max duration: {np.max(durations)} samples")
-print(f"Min duration: {np.min(durations)} samples") 
+    # === Print First 5 Vortex Groups ===
+    print("\n🔍 First 5 vortex groups:")
+    for i, group in enumerate(vortex_groups[:5]):
+        print(f"\nVortex {i + 1}:")
+        print(f"   🟢 Start index: {group[0]}")
+        print(f"   🔴 End index: {group[-1]}")
+        print(f"   ⏱ Duration: {len(group)} samples")
+        print(f"   🧭 Detection window values: {df['gt_detection_win'].iloc[max(group[0]-10, 0):group[-1]+1].values}")
+
+    # === Duration Stats ===
+    durations = [len(group) for group in vortex_groups]
+    print("\n📊 Vortex Duration Statistics:")
+    print(f"   📈 Average: {np.mean(durations):.2f} samples")
+    print(f"   🔼 Max: {np.max(durations)} samples")
+    print(f"   🔽 Min: {np.min(durations)} samples")

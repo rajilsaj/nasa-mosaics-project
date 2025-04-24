@@ -1,43 +1,52 @@
 import pandas as pd
+from typing import List, Tuple
 
-def get_true_ranges(df, column1, column2):
+def get_true_ranges(df: pd.DataFrame, condition_col: str, index_col: str) -> List[Tuple[int, int]]:
     """
-    Returns a list of tuples (start_index, end_index) for each contiguous block of True values in the specified column.
-    
-    Parameters:
-        df (pd.DataFrame): DataFrame containing the boolean column.
-        column (str): Name of the boolean column in the DataFrame.
-    
-    Returns:
-        list of tuples: Each tuple represents (start_index, end_index) for a block of True values.
+    Extracts contiguous ranges where a boolean column is True and maps those to corresponding
+    values from another column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing the columns to analyze.
+    condition_col : str
+        Name of the boolean condition column (e.g., 'gt_detection_win').
+    index_col : str
+        Column from which to extract the start/end values (e.g., 'SCLK').
+
+    Returns
+    -------
+    List[Tuple[int, int]]
+        A list of (start_value, end_value) tuples where the condition was True.
     """
     ranges = []
     in_range = False
-    start_index = None
-    i = 0
-    for val1, val2 in zip(df[column1], df[column2]):
-        if val1 and not in_range:
-            start = int(val2)
-            # Start of a new True block
+    start_value = None
+
+    for condition, value in zip(df[condition_col], df[index_col]):
+        if condition and not in_range:
+            start_value = int(value)
             in_range = True
-        elif not val1 and in_range:
-            # End of a True block
-            end = int(val2) - 1
-            ranges.append((start, end))
+        elif not condition and in_range:
+            end_value = int(value)
+            ranges.append((start_value, end_value))
             in_range = False
-        i += 1
-    
-    # If the DataFrame ends while still in a True block, capture that block
-    if in_range:
-        ranges.append((start_index, df.index[-1]))
-    
+
+    # Catch edge case if the last condition stays True until the end
+    if in_range and start_value is not None:
+        ranges.append((start_value, int(df[index_col].iloc[-1])))
+
     return ranges
 
-if __name__ == '__main__':
-    # Example usage:
+
+if __name__ == "__main__":
+    # Load data and run example
+    df = pd.read_csv("ml_ready_vortex_data.csv")
+    true_ranges = get_true_ranges(df, "gt_detection_win", "SCLK")
+
+    print("Detected Ranges (start SCLK, end SCLK):")
+    for r in true_ranges[:10]:
+        print(r)
     
-    df = pd.read_csv('ml_ready_vortex_data.csv')
-    
-    true_ranges = get_true_ranges(df, 'gt_detection_win', "SCLK")
-    print(true_ranges)
-    print(len(true_ranges))
+    print(f"\nTotal detected true ranges: {len(true_ranges)}")
