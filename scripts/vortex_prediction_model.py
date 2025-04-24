@@ -24,10 +24,10 @@ THRESHOLD_STEP = 0.01
 
 def prepare_data(df, feature_processor, force_recalculate=False):
     if FEATURES_FILE.exists() and not force_recalculate:
-        print("📥 Loading precomputed features...")
+        print("Loading precomputed features...")
         return pd.read_csv(FEATURES_FILE)
 
-    print("⚙️ Recomputing features...")
+    print("Recomputing features...")
     features = []
 
     for i in range(50, len(df) - LOOKAHEAD):
@@ -44,7 +44,7 @@ def prepare_data(df, feature_processor, force_recalculate=False):
 
 
 def train_model(X_train, y_train, model_type="xgboost"):
-    print(f"🧠 Training {model_type.upper()} model...")
+    print(f"Training {model_type.upper()} model...")
 
     if model_type == "rf":
         model = RandomForestClassifier(
@@ -87,7 +87,7 @@ def evaluate(model, X_test, y_test, save_dir, model_type):
     recall = recall_score(y_test, y_pred)
     f1 = f1_score(y_test, y_pred)
 
-    print("\n📊 Classification Report:")
+    print("\nClassification Report:")
     print(classification_report(y_test, y_pred))
     print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred))
 
@@ -114,11 +114,11 @@ def evaluate(model, X_test, y_test, save_dir, model_type):
 
 def main(args):
     model_type = args.model.lower()
-    print("📄 Loading raw time-series data...")
+    print("Loading raw time-series data...")
     df = pd.read_csv(DATA_FILE)
     processor = FeatureProcessor()
 
-    print("🔍 Preparing features and labels...")
+    print("Preparing features and labels...")
     data = prepare_data(df, processor, force_recalculate=args.force_recalculate)
     data = data.dropna()
     X = data.drop(columns=["ml_label"])
@@ -131,15 +131,15 @@ def main(args):
     model_file = MODEL_DIR / f"{model_type}_vortex_model.joblib"
 
     if model_file.exists() and not args.force_retrain:
-        print("📦 Loading existing model...")
+        print("Loading existing model...")
         model = load(model_file)
     else:
         model = train_model(X_train, y_train, model_type=model_type)
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         dump(model, model_file)
-        print(f"💾 Model saved to {model_file}")
+        print(f"Model saved to {model_file}")
 
-    print("📈 Evaluating model...")
+    print("Evaluating model...")
     evaluate(model, X_test, y_test, RESULTS_DIR, model_type)
 
 

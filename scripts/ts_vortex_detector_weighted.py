@@ -1,144 +1,119 @@
-# TS Vortex Detector Weighted
-import time
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
 from pathlib import Path
-from tqdm import tqdm
-
-from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
-    precision_score, recall_score, f1_score, roc_auc_score
+    classification_report, confusion_matrix, precision_score, recall_score, f1_score
 )
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 
-from vortexdetect.visualize_metrics import visualize_model_metrics, create_model_report
-from vortexdetect.analyze_overlap import analyze_pressure_patterns
+# === Paths ===
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_PATH = BASE_DIR / "data" / "address.csv"
+RESULTS_DIR = BASE_DIR / "results" / "random_forest"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-
-def create_temporal_features(sequence):
-    """Create 5 statistical features from a pressure difference window."""
-    recent_trend = np.mean(sequence[-20:-10]) if len(sequence) >= 20 else 0
-    slope = np.polyfit(range(len(sequence)), sequence, 1)[0]
-    return np.array([
-        np.mean(sequence),
-        np.std(sequence),
-        np.sum(sequence < 0),
-        recent_trend,
-        slope
-    ])
+FEATURES = [
+    "mean_pressure", "std_pressure", "pressure_change", "pressure_drop_ratio", 
+    "z_score", "scheme1_detection", "scheme2_detection"
+]
+TARGET = "ml_label"
 
 
-def load_and_prepare_data(file_path: Path, window_size=50, negative_ratio=10):
-    if not file_path.exists():
-        raise FileNotFoundError(f"Input file not found: {file_path}")
-    
-    df = pd.read_csv(file_path)
-    df['pressure_diff'] = df['PRESSURE'].diff().shift(1)
-
-    vortex_events = df[df['gt_fwhm'] > 0].index
-    vortex_groups = []
-    current_group = [vortex_events[0]]
-    for i in range(1, len(vortex_events)):
-        if vortex_events[i] - vortex_events[i - 1] == 1:
-            current_group.append(vortex_events[i])
-        else:
-            vortex_groups.append(current_group)
-            current_group = [vortex_events[i]]
-    vortex_groups.append(current_group)
-
-    X, y = [], []
-
-    for group in tqdm(vortex_groups, desc="Positive samples"):
-        start_idx = group[0]
-        detection_windows = df[df['gt_detection_win'] > 0].index
-        detection_before = detection_windows[detection_windows < start_idx]
-        if len(detection_before) > 0:
-            last_detection = detection_before[-1]
-            if last_detection >= window_size:
-                seq = df['pressure_diff'].iloc[last_detection - window_size:last_detection].dropna().values
-                if len(seq) == window_size:
-                    X.append(create_temporal_features(seq))
-                    y.append(1)
-
-    n_pos = len(y)
-    n_neg = n_pos * negative_ratio
-    non_detection = df[(df['gt_detection_win'] == 0) & (df.index >= window_size)].index
-    sampled = np.random.choice(non_detection, min(n_neg, len(non_detection)), replace=False)
-
-    for idx in tqdm(sampled, desc="Negative samples"):
-        seq = df['pressure_diff'].iloc[idx - window_size:idx].dropna().values
-        if len(seq) == window_size:
-            X.append(create_temporal_features(seq))
-            y.append(0)
-
-    return np.array(X), np.array(y), df
+def load_data(path):
+    df = pd.read_csv(path)
+    df["scheme1_detection"] = df["scheme1_detection"].astype(int)
+    df["scheme2_detection"] = df["scheme2_detection"].astype(int)
+    df = df.dropna(subset=FEATURES + [TARGET])
+    X = df[FEATURES]
+    y = df[TARGET].astype(int)
+    return X, y
 
 
-def train_and_evaluate(X, y, df):
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=42
-    )
+def split_data(X, y, ratio=0.8):
+    split_idx = int(len(X) * ratio)
+    return X[:split_idx], X[split_idx:], y[:split_idx], y[split_idx:]
 
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
 
-    weight_scenarios = [
-        'balanced', {0: 1, 1: 2}, {0: 1, 1: 3}, {0: 1, 1: 4}, {0: 1, 1: 5}, {0: 1, 1: 10}
-    ]
+def train_model(X_train, y_train):
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    return model
 
-    results_dir = Path("results") / "weighted_rf"
-    results_dir.mkdir(parents=True, exist_ok=True)
 
-    for weight in weight_scenarios:
-        print(f"\n🧪 Testing with class_weight = {weight}")
-        model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight=weight)
-        model.fit(X_train, y_train)
+def evaluate(model, X_test, y_test, threshold=0.5):
+    probs = model.predict_proba(X_test)[:, 1]
+    preds = (probs >= threshold).astype(int)
 
-        y_prob = model.predict_proba(X_test)[:, 1]
-        y_pred = (y_prob >= 0.5).astype(int)
+    metrics = {
+        "precision": precision_score(y_test, preds, zero_division=0),
+        "recall": recall_score(y_test, preds, zero_division=0),
+        "f1_score": f1_score(y_test, preds, zero_division=0),
+    }
 
-        precision = precision_score(y_test, y_pred)
-        recall = recall_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred)
-        auc = roc_auc_score(y_test, y_prob)
-        energy_saved = (1 - np.mean(y_pred)) * 100
-        data_quality = precision * 100
+    print("\nClassification Report:")
+    print(classification_report(y_test, preds))
+    print("\nConfusion Matrix:")
+    print(confusion_matrix(y_test, preds))
 
-        print(f"Precision: {precision:.3f} | Recall: {recall:.3f} | F1: {f1:.3f} | AUC: {auc:.3f}")
-        print(f"Energy Saved: {energy_saved:.2f}% | Data Quality: {data_quality:.2f}%")
+    return metrics, probs, preds
 
-        model_name = f"RF_Weights_{str(weight).replace(':', '_')}"
-        visualize_model_metrics(
-            model=model,
-            X_test=X_test,
-            y_test=y_test,
-            y_pred=y_pred,
-            y_pred_proba=y_prob,
-            model_name=model_name,
-            save_dir=results_dir
-        )
 
-        create_model_report(model_name, results_dir)
+def tune_threshold(y_test, y_probs):
+    thresholds = np.linspace(0, 1, 101)
+    best_f1, best_thresh = 0, 0
+    f1s, precisions, recalls = [], [], []
 
-        patterns = analyze_pressure_patterns(df, y_test, y_pred)
-        for k, v in patterns.items():
-            print(f"\nPattern stats for {k}:")
-            for metric, val in v.items():
-                print(f"{metric}: {val:.4f}")
+    for t in thresholds:
+        preds = (y_probs >= t).astype(int)
+        f1 = f1_score(y_test, preds, zero_division=0)
+        f1s.append(f1)
+        precisions.append(precision_score(y_test, preds, zero_division=0))
+        recalls.append(recall_score(y_test, preds, zero_division=0))
+        if f1 > best_f1:
+            best_f1, best_thresh = f1, t
+
+    return best_thresh, best_f1, thresholds, f1s, precisions, recalls
+
+
+def plot_threshold_metrics(thresholds, f1s, precisions, recalls, best_thresh):
+    plt.figure(figsize=(8, 6))
+    plt.plot(thresholds, f1s, label="F1 Score", marker="o")
+    plt.plot(thresholds, precisions, label="Precision", marker="x")
+    plt.plot(thresholds, recalls, label="Recall", marker="s")
+    plt.axvline(best_thresh, linestyle="--", color="gray", label=f"Best: {best_thresh:.2f}")
+    plt.xlabel("Threshold")
+    plt.ylabel("Metric Value")
+    plt.title("Threshold Tuning (Random Forest)")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "threshold_tuning_rf.png")
+    plt.close()
+
+
+def save_metrics(metrics):
+    pd.DataFrame([metrics]).to_csv(RESULTS_DIR / "metrics_summary.csv", index=False)
 
 
 def main():
-    print("🚀 Starting weighted vortex detection experiment")
-    start = time.time()
+    print("Loading and preparing data...")
+    X, y = load_data(DATA_PATH)
+    X_train, X_test, y_train, y_test = split_data(X, y)
 
-    data_path = Path("data") / "ml_ready_vortex_data.csv"
-    X, y, df = load_and_prepare_data(data_path)
-    train_and_evaluate(X, y, df)
+    print("Training model...")
+    model = train_model(X_train, y_train)
 
-    print(f"\n✅ Done in {time.time() - start:.2f} seconds")
+    print("Evaluating at default threshold = 0.5...")
+    base_metrics, y_probs, _ = evaluate(model, X_test, y_test)
+
+    print("Tuning threshold for best F1...")
+    best_thresh, best_f1, thresholds, f1s, precisions, recalls = tune_threshold(y_test, y_probs)
+    print(f"\nBest Threshold: {best_thresh:.2f}, F1 Score: {best_f1:.3f}")
+
+    plot_threshold_metrics(thresholds, f1s, precisions, recalls, best_thresh)
+    save_metrics(base_metrics)
 
 
 if __name__ == "__main__":

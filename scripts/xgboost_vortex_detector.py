@@ -11,8 +11,8 @@ from sklearn.metrics import (
 
 # === XGBoost Import Handling ===
 if importlib.util.find_spec("xgboost") is None:
-    print("❌ ERROR: XGBoost is not installed.")
-    print("👉 Please run: pip install xgboost")
+    print("ERROR: XGBoost is not installed.")
+    print("Please run: pip install xgboost")
     sys.exit(1)
 else:
     from xgboost import XGBClassifier
@@ -68,9 +68,9 @@ def evaluate(model, X_test, y_test, threshold=0.5):
         "f1_score": f1_score(y_test, preds, zero_division=0),
     }
 
-    print("\n📊 Classification Report:")
+    print("\nClassification Report:")
     print(classification_report(y_test, preds))
-    print("\n🧮 Confusion Matrix:")
+    print("\nConfusion Matrix:")
     print(confusion_matrix(y_test, preds))
 
     return metrics, probs
@@ -118,24 +118,24 @@ def save_metrics(metrics, output_dir):
 
 
 def main():
-    print("📥 Loading data...")
+    print("Loading data...")
     X, y = load_data(DATA_PATH)
     X_train, X_test, y_train, y_test = split_data(X, y)
 
-    print("🧠 Training XGBoost model...")
+    print("Training XGBoost model...")
     model = train_model(X_train, y_train)
 
-    print("🔎 Evaluating model at threshold = 0.5...")
+    print("Evaluating model at threshold = 0.5...")
     base_metrics, y_probs = evaluate(model, X_test, y_test)
 
-    print("📈 Tuning threshold for best F1...")
+    print("Tuning threshold for best F1...")
     best_thresh, best_f1, thresholds, f1s, precisions, recalls = tune_threshold(y_test, y_probs)
-    print(f"\n✅ Best Threshold: {best_thresh:.2f}, Best F1 Score: {best_f1:.3f}")
+    print(f"\nBest Threshold: {best_thresh:.2f}, Best F1 Score: {best_f1:.3f}")
 
-    print("💾 Saving results...")
+    print("Saving results...")
     plot_thresholds(thresholds, f1s, precisions, recalls, best_thresh, RESULTS_DIR)
     save_metrics(base_metrics, RESULTS_DIR)
-    print("🎉 Done!")
+    print("Done!")
 
 
 if __name__ == "__main__":

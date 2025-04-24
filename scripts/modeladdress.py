@@ -52,9 +52,9 @@ def evaluate(model, X_test, y_test, threshold=0.5):
         "f1_score": f1_score(y_test, preds, zero_division=0),
     }
 
-    print("\n📊 Classification Report:")
+    print("\nClassification Report:")
     print(classification_report(y_test, preds))
-    print("\n🧮 Confusion Matrix:")
+    print("\nConfusion Matrix:")
     print(confusion_matrix(y_test, preds))
 
     return metrics, probs, preds
@@ -98,19 +98,19 @@ def save_metrics(metrics):
 
 
 def main():
-    print("📥 Loading and preparing data...")
+    print("Loading and preparing data...")
     X, y = load_data(DATA_PATH)
     X_train, X_test, y_train, y_test = split_data(X, y)
 
-    print("🧠 Training model...")
+    print("Training model...")
     model = train_model(X_train, y_train)
 
-    print("🔎 Evaluating at default threshold = 0.5...")
+    print("Evaluating at default threshold = 0.5...")
     base_metrics, y_probs, _ = evaluate(model, X_test, y_test)
 
-    print("📈 Tuning threshold for best F1...")
+    print("Tuning threshold for best F1...")
     best_thresh, best_f1, thresholds, f1s, precisions, recalls = tune_threshold(y_test, y_probs)
-    print(f"\n✅ Best Threshold: {best_thresh:.2f}, F1 Score: {best_f1:.3f}")
+    print(f"\nBest Threshold: {best_thresh:.2f}, F1 Score: {best_f1:.3f}")
 
     plot_threshold_metrics(thresholds, f1s, precisions, recalls, best_thresh)
     save_metrics(base_metrics)

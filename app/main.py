@@ -17,16 +17,16 @@ SCRIPT_SEQUENCE = [
 def run_script(script_name, message):
     script_path = SCRIPTS_DIR / script_name
     if not script_path.exists():
-        print(f"❌ {script_name} not found at {script_path}")
+        print(f" {script_name} not found at {script_path}")
         return
 
-    print(f"\n🚀 {message}")
+    print(f"\n {message}")
     result = subprocess.run(["python", str(script_path)], capture_output=True, text=True)
 
     if result.returncode == 0:
-        print(f"✅ {script_name} completed successfully.")
+        print(f" {script_name} completed successfully.")
     else:
-        print(f"❌ Error in {script_name}:")
+        print(f" Error in {script_name}:")
         print(result.stderr)
 
 

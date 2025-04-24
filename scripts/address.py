@@ -109,7 +109,7 @@ def threshold_tuning(labeled_df, output_dir, model_name, window_size):
         if f1 > best_f1:
             best_f1, best_thresh = f1, t
 
-    print(f"\n✅ Best threshold: {best_thresh:.4f}")
+    print(f"\nBest threshold: {best_thresh:.4f}")
     print(f"F1 Score: {best_f1:.3f}")
     print(f"Precision: {precisions[np.argmax(f1s)]:.3f}")
     print(f"Recall: {recalls[np.argmax(f1s)]:.3f}")
@@ -141,16 +141,16 @@ def main(model_name="Random Forest", window_size=100):
     ml_data_file = Path("data/ml_ready_vortex_data.csv")
     output_path = Path("data/address.csv")
 
-    print("📥 Loading and preparing data...")
+    print("Loading and preparing data...")
     sclk_list, ml_df = load_data(vortex_file, ml_data_file)
 
-    print("🧠 Generating labeled windows...")
+    print("Generating labeled windows...")
     labeled_df = generate_labeled_windows(sclk_list, ml_df, fixed_before=window_size)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     labeled_df.to_csv(output_path, index=False)
-    print(f"[✓] Saved labeled windows to {output_path} — {len(labeled_df)} rows")
+    print(f"Saved labeled windows to {output_path} — {len(labeled_df)} rows")
 
-    print("📊 Performing threshold tuning...")
+    print("Performing threshold tuning...")
     threshold_tuning(labeled_df, "data", model_name, window_size)
 
 

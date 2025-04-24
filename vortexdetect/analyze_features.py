@@ -63,7 +63,7 @@ def analyze_feature_importance(
     }
 
     if do_permutation:
-        print("🔁 Calculating permutation importance...")
+        print("Calculating permutation importance...")
         base_score = model.score(X_test, y_test)
         permutation_scores = np.zeros((len(feature_names), n_permutations))
 
@@ -119,5 +119,5 @@ def analyze_feature_importance(
             f.write("<img src='permutation_importance.png'><br>")
         f.write("</body></html>")
 
-    print(f"📊 Feature importance results saved to {save_dir}")
+    print(f" Feature importance results saved to {save_dir}")
     return results

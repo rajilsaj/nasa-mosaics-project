@@ -10,7 +10,7 @@ DATA_PATH = BASE_DIR / "data" / "ml_ready_vortex_data.csv"
 if not DATA_PATH.exists():
     raise FileNotFoundError(f"❌ Dataset not found: {DATA_PATH}")
 
-print(f"📂 Reading data from: {DATA_PATH}")
+print(f"Reading data from: {DATA_PATH}")
 df = pd.read_csv(DATA_PATH)
 
 # === Identify Vortex Events ===
@@ -18,7 +18,7 @@ vortex_indices = df[df['gt_fwhm'] > 0].index
 vortex_groups = []
 
 if vortex_indices.empty:
-    print("⚠️ No vortex events found in the dataset.")
+    print("No vortex events found in the dataset.")
 else:
     current_group = [vortex_indices[0]]
     for i in range(1, len(vortex_indices)):
@@ -30,21 +30,21 @@ else:
     vortex_groups.append(current_group)
 
     # === Overview ===
-    print(f"\n🌪️ Total vortex samples: {len(vortex_indices)}")
-    print(f"🧩 Number of unique vortex groups: {len(vortex_groups)}")
+    print(f"\n Total vortex samples: {len(vortex_indices)}")
+    print(f" Number of unique vortex groups: {len(vortex_groups)}")
 
     # === Print First 5 Vortex Groups ===
-    print("\n🔍 First 5 vortex groups:")
+    print("\n First 5 vortex groups:")
     for i, group in enumerate(vortex_groups[:5]):
         print(f"\nVortex {i + 1}:")
-        print(f"   🟢 Start index: {group[0]}")
-        print(f"   🔴 End index: {group[-1]}")
-        print(f"   ⏱ Duration: {len(group)} samples")
-        print(f"   🧭 Detection window values: {df['gt_detection_win'].iloc[max(group[0]-10, 0):group[-1]+1].values}")
+        print(f"   Start index: {group[0]}")
+        print(f"   End index: {group[-1]}")
+        print(f"   Duration: {len(group)} samples")
+        print(f"   Detection window values: {df['gt_detection_win'].iloc[max(group[0]-10, 0):group[-1]+1].values}")
 
     # === Duration Stats ===
     durations = [len(group) for group in vortex_groups]
-    print("\n📊 Vortex Duration Statistics:")
-    print(f"   📈 Average: {np.mean(durations):.2f} samples")
-    print(f"   🔼 Max: {np.max(durations)} samples")
-    print(f"   🔽 Min: {np.min(durations)} samples")
+    print("\n Vortex Duration Statistics:")
+    print(f"   Average: {np.mean(durations):.2f} samples")
+    print(f"   Max: {np.max(durations)} samples")
+    print(f"   Min: {np.min(durations)} samples")

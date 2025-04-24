@@ -99,7 +99,7 @@ def visualize_model_metrics(model, X_test, y_test, y_pred, y_pred_proba, model_n
     plt.close()
 
     pd.DataFrame([summary]).to_csv(save_dir / 'metrics_summary.csv', index=False)
-    print(f"✅ Visual metrics saved in: {save_dir}")
+    print(f" Visual metrics saved in: {save_dir}")
 
 
 def create_model_report(model_name: str, results_dir: str):
@@ -122,32 +122,32 @@ def create_model_report(model_name: str, results_dir: str):
     </head>
     <body>
         <h1>{model_name} Evaluation Report</h1>
-        <h2>📊 Metrics</h2>
+        <h2> Metrics</h2>
         <ul>
             {''.join([f"<li><strong>{col}:</strong> {val:.4f}</li>" for col, val in metrics_df.iloc[0].items()])}
         </ul>
         <div class="metric-block">
-            <h2>📷 Confusion Matrix</h2>
+            <h2> Confusion Matrix</h2>
             <img src="confusion_matrix.png">
         </div>
         <div class="metric-block">
-            <h2>🔍 ROC Curve</h2>
+            <h2> ROC Curve</h2>
             <img src="roc_curve.png">
         </div>
         <div class="metric-block">
-            <h2>📉 Precision-Recall Curve</h2>
+            <h2> Precision-Recall Curve</h2>
             <img src="precision_recall_curve.png">
         </div>
         <div class="metric-block">
-            <h2>📊 Feature Importance</h2>
+            <h2> Feature Importance</h2>
             <img src="feature_importance.png">
         </div>
         <div class="metric-block">
-            <h2>📈 Prediction Probability Distribution</h2>
+            <h2> Prediction Probability Distribution</h2>
             <img src="probability_distribution.png">
         </div>
         <div class="metric-block">
-            <h2>📋 Combined Metrics</h2>
+            <h2> Combined Metrics</h2>
             <img src="combined_metrics.png">
         </div>
     </body>
@@ -158,4 +158,4 @@ def create_model_report(model_name: str, results_dir: str):
     with open(report_path, "w") as f:
         f.write(html_content)
 
-    print(f"✅ HTML report saved to {report_path}")
+    print(f" HTML report saved to {report_path}")
