@@ -13,7 +13,6 @@ SCRIPT_SEQUENCE = [
     ("vortex_prediction_model.py", "Running unified vortex model with configurable classifier..."),
 ]
 
-
 def run_script(script_name, message):
     script_path = SCRIPTS_DIR / script_name
     if not script_path.exists():
@@ -29,12 +28,10 @@ def run_script(script_name, message):
         print(f" Error in {script_name}:")
         print(result.stderr)
 
-
 def main():
     print("==== Vortex Detection Project Runner ====")
     for script, message in SCRIPT_SEQUENCE:
         run_script(script, message)
-
 
 if __name__ == "__main__":
     main()

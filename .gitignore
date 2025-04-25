@@ -3,3 +3,12 @@ env/
 results/
 vortexdetect.egg-info/
 logs/
+data/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.egg
+*.egg-info
