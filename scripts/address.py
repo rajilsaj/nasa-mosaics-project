@@ -1,16 +1,16 @@
 import pandas as pd
 import numpy as np
-import os
 import matplotlib.pyplot as plt
 import argparse
 from pathlib import Path
 from sklearn.metrics import f1_score, precision_score, recall_score
 
 # Parameters (defaults)
-DROP_THRESHOLD = 0.01
-Z_SCORE_THRESHOLD = 1.0
-SUB_WINDOW_SIZE = 10
-STEP_SIZE = 1
+DROP_THRESHOLD = 0.03
+Z_SCORE_THRESHOLD = 2.0
+SUB_WINDOW_SIZE = 20
+STEP_SIZE = 5
+
 
 def load_data(vortex_path, data_path):
     vortex_df = pd.read_csv(vortex_path)
