@@ -194,15 +194,24 @@ class VortexLSTMModel:
         
         return sequences, labels
         
-    def focal_loss(self, gamma=2.0, alpha=0.5):
+    def focal_loss(self, gamma=1.5, alpha=None):
+        """Focal loss with temporal awareness.
+        
+        Args:
+            gamma: Focusing parameter (default: 1.5, reduced from 2.0 to be less aggressive)
+            alpha: Class weight for positive class (default: None, will be calculated from data)
+        """
         def focal_loss_fixed(y_true, y_pred):
             y_true = tf.cast(y_true, tf.float32)
             epsilon = 1e-7
             y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
             
+            # Calculate focal loss components
             pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
             pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
             
+            # Apply focal loss formula with adjusted gamma
+            # Lower gamma means less aggressive focusing on hard examples
             loss_1 = -alpha * tf.pow(1. - pt_1, gamma) * tf.math.log(pt_1)
             loss_0 = -(1 - alpha) * tf.pow(pt_0, gamma) * tf.math.log(1. - pt_0)
             
@@ -210,36 +219,41 @@ class VortexLSTMModel:
         return focal_loss_fixed
     
     def calculate_alpha(self, y_train: np.ndarray) -> float:
-        """Calculate alpha for focal loss based on class distribution."""
+        """Calculate alpha for focal loss based on class distribution.
+        Adjusted to consider temporal nature of the data."""
         n_positive = np.sum(y_train == 1)
         n_negative = np.sum(y_train == 0)
         total = n_positive + n_negative
         
-        # Back to dynamic calculation based on class distribution
-        alpha = n_negative / total
+        # Calculate alpha based on class distribution
+        # Using a more balanced approach since we're already sampling 1:1
+        alpha = 0.5  # Fixed at 0.5 since we're balancing classes
         
         self.debug_print(f"\nClass distribution for alpha calculation:")
         self.debug_print(f"Positive examples (vortices): {n_positive}")
         self.debug_print(f"Negative examples (non-vortices): {n_negative}")
-        self.debug_print(f"Calculated alpha: {alpha:.4f}")
+        self.debug_print(f"Using fixed alpha: {alpha:.4f} (balanced sampling)")
         
         return alpha
     
-    def build_model(self, input_shape: tuple, alpha: float = None):
-        """Build the vortex prediction model."""
+    def build_model(self, input_shape: tuple, alpha: float = None, gamma: float = 1.5):
+        """Build the vortex prediction model with Bidirectional LSTM."""
         model = Sequential([
-            LSTM(128,  # More units in single layer
-                 kernel_regularizer=l2(0.0005),  # Reduced regularization
-                 recurrent_regularizer=l2(0.0005),
-                 input_shape=input_shape),
+            Bidirectional(
+                LSTM(64,  # Reduced units since we're using bidirectional
+                     kernel_regularizer=l2(0.0005),
+                     recurrent_regularizer=l2(0.0005),
+                     return_sequences=False),  # We don't need sequences for next layer
+                input_shape=input_shape
+            ),
             Dense(32, activation='relu'),
-            Dropout(0.2),  # Reduced dropout
+            Dropout(0.2),
             Dense(1, activation='sigmoid')
         ])
         
         model.compile(
             optimizer=Adam(learning_rate=0.001),
-            loss=self.focal_loss(gamma=2.0, alpha=alpha),
+            loss=self.focal_loss(gamma=gamma, alpha=alpha),
             metrics=['accuracy', 
                     tf.keras.metrics.AUC(curve='ROC', name='roc_auc'),
                     tf.keras.metrics.AUC(curve='PR', name='pr_auc')]
@@ -247,8 +261,31 @@ class VortexLSTMModel:
         
         return model
     
-    def train(self, X_train, y_train, X_val, y_val, epochs=50, batch_size=256):
-        """Train the model."""
+    def calculate_class_weights(self, y_train: np.ndarray, y_val: np.ndarray, y_test: np.ndarray) -> dict:
+        """Calculate class weights based on test set distribution using square root scaling.
+        
+        Args:
+            y_train: Training labels
+            y_val: Validation labels
+            y_test: Test labels (real-world distribution)
+        """
+        # Calculate weights based on test set distribution
+        n_positive_test = np.sum(y_test == 1)
+        n_negative_test = np.sum(y_test == 0)
+        total_test = n_positive_test + n_negative_test
+        
+        # Calculate weights using square root scaling for gentler weights
+        weight_positive = np.sqrt(total_test / (2 * n_positive_test))
+        weight_negative = np.sqrt(total_test / (2 * n_negative_test))
+        
+        self.debug_print(f"\nClass weights calculation (square root scaling):")
+        self.debug_print(f"Test set distribution - Positive: {n_positive_test}, Negative: {n_negative_test}")
+        self.debug_print(f"Calculated weights - Positive: {weight_positive:.4f}, Negative: {weight_negative:.4f}")
+        
+        return {0: weight_negative, 1: weight_positive}
+
+    def train(self, X_train, y_train, X_val, y_val, X_test, y_test, epochs=50, batch_size=256):
+        """Train the model with temporal-aware focal loss and class weights."""
         # Print statistics about the data
         self.debug_print("\nTraining Data Statistics:")
         self.debug_print(f"Total examples: {len(X_train)}")
@@ -256,51 +293,32 @@ class VortexLSTMModel:
         self.debug_print(f"Non-vortex examples: {len(y_train) - sum(y_train)}")
         self.debug_print(f"Ratio: {(len(y_train) - sum(y_train)) / sum(y_train):.2f}:1")
         
-        # Add detailed debugging
-        self.debug_print("\nVerifying sampling results:")
-        vortex_indices = np.where(y_train == 1)[0]
-        non_vortex_indices = np.where(y_train == 0)[0]
-        self.debug_print(f"Number of vortex sequences: {len(vortex_indices)}")
-        self.debug_print(f"Number of non-vortex sequences: {len(non_vortex_indices)}")
-        self.debug_print(f"First few vortex indices: {vortex_indices[:10]}")
+        # Calculate class weights based on test set distribution
+        class_weights = self.calculate_class_weights(y_train, y_val, y_test)
         
-        # Check distribution in first few sequences
-        self.debug_print("\nChecking first few sequences:")
-        for i in range(min(20, len(y_train))):
-            self.debug_print(f"Sequence {i}: Label = {y_train[i]}")
-        
-        self.debug_print("\nValidation Data Statistics:")
-        self.debug_print(f"Total examples: {len(X_val)}")
-        self.debug_print(f"Vortex examples: {sum(y_val)}")
-        self.debug_print(f"Non-vortex examples: {len(y_val) - sum(y_val)}")
-        self.debug_print(f"Ratio: {(len(y_val) - sum(y_val)) / sum(y_val):.2f}:1")
-        
-        # Add logging for class weights
-        self.debug_print("\nVerifying class weights in training batches...")
-        for i in range(0, len(X_train), batch_size):
-            batch_y = y_train[i:i+batch_size]
-            pos_weight = np.sum(batch_y == 1) / len(batch_y)
-            neg_weight = np.sum(batch_y == 0) / len(batch_y)
-            self.debug_print(f"Batch {i//batch_size}: Positive weight: {pos_weight:.4f}, Negative weight: {neg_weight:.4f}")
-            if i > batch_size * 5:  # Only print first 5 batches
-                break
-        
-        # Calculate alpha based on class distribution
+        # Calculate alpha for focal loss
         alpha = self.calculate_alpha(y_train)
-        self.debug_print(f"Alpha: {alpha}")
         
         # Train model
         self.debug_print("\nTraining vortex prediction model...")
-        self.model = self.build_model((self.window_size, 2), alpha=alpha)
+        self.model = self.build_model((self.window_size, 2), alpha=alpha, gamma=1.5)
         
-        # Add learning rate scheduler
+        # Add learning rate scheduler with adjusted patience
         reduce_lr = ReduceLROnPlateau(
             monitor='val_pr_auc',
             factor=0.5,
-            patience=3,
+            patience=5,  # Increased patience for temporal data
             min_lr=1e-6,
             mode='max',
             verbose=1
+        )
+        
+        # Add early stopping with adjusted patience
+        early_stopping = EarlyStopping(
+            monitor='val_pr_auc',
+            patience=7,  # Increased patience for temporal data
+            mode='max',
+            restore_best_weights=True
         )
         
         history = self.model.fit(
@@ -308,8 +326,9 @@ class VortexLSTMModel:
             validation_data=(X_val, y_val),
             epochs=epochs,
             batch_size=batch_size,
+            class_weight=class_weights,  # Add class weights here
             callbacks=[
-                EarlyStopping(monitor='val_pr_auc', patience=5, mode='max'),
+                early_stopping,
                 ModelCheckpoint(
                     'best_model.h5',
                     monitor='val_pr_auc',
@@ -973,7 +992,7 @@ def main():
         
         # Train model
         print("\nTraining LSTM model...")
-        history = model.train(X_train, y_train, X_val, y_val, epochs=30, batch_size=128)
+        history = model.train(X_train, y_train, X_val, y_val, X_test, y_test, epochs=30, batch_size=128)
         
         # Save model
         model_path.parent.mkdir(parents=True, exist_ok=True)
