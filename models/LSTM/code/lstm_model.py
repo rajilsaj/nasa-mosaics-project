@@ -194,29 +194,40 @@ class VortexLSTMModel:
         
         return sequences, labels
         
-    def focal_loss(self, gamma=1.5, alpha=None):
+    def temporal_focal_loss(self, gamma=1.5, alpha=None, temporal_weight=0.1):
         """Focal loss with temporal awareness.
         
         Args:
-            gamma: Focusing parameter (default: 1.5, reduced from 2.0 to be less aggressive)
-            alpha: Class weight for positive class (default: None, will be calculated from data)
+            gamma: Focusing parameter (default: 1.5)
+            alpha: Class weight (default: 0.5 for balanced data)
+            temporal_weight: Weight for temporal smoothness term
         """
-        def focal_loss_fixed(y_true, y_pred):
+        def loss_function(y_true, y_pred):
+            # Original focal loss components
             y_true = tf.cast(y_true, tf.float32)
             epsilon = 1e-7
             y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
             
-            # Calculate focal loss components
+            # Focal loss calculation
             pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
             pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
             
-            # Apply focal loss formula with adjusted gamma
-            # Lower gamma means less aggressive focusing on hard examples
-            loss_1 = -alpha * tf.pow(1. - pt_1, gamma) * tf.math.log(pt_1)
-            loss_0 = -(1 - alpha) * tf.pow(pt_0, gamma) * tf.math.log(1. - pt_0)
+            focal_loss_1 = -alpha * tf.pow(1. - pt_1, gamma) * tf.math.log(pt_1)
+            focal_loss_0 = -(1 - alpha) * tf.pow(pt_0, gamma) * tf.math.log(1. - pt_0)
+            focal_loss = tf.reduce_mean(focal_loss_1 + focal_loss_0)
             
-            return tf.reduce_mean(loss_1 + loss_0)
-        return focal_loss_fixed
+            # Temporal smoothness term
+            # Penalize large changes in predictions for same class
+            pred_diff = tf.abs(y_pred[1:] - y_pred[:-1])
+            same_class = tf.equal(y_true[1:], y_true[:-1])
+            temporal_loss = tf.reduce_mean(tf.where(same_class, pred_diff, tf.zeros_like(pred_diff)))
+            
+            # Combine losses
+            total_loss = focal_loss + temporal_weight * temporal_loss
+            
+            return total_loss
+        
+        return loss_function
     
     def calculate_alpha(self, y_train: np.ndarray) -> float:
         """Calculate alpha for focal loss based on class distribution.
@@ -237,7 +248,7 @@ class VortexLSTMModel:
         return alpha
     
     def build_model(self, input_shape: tuple, alpha: float = None, gamma: float = 1.5):
-        """Build the vortex prediction model with Bidirectional LSTM."""
+        """Build the vortex prediction model with Bidirectional LSTM and temporal loss."""
         model = Sequential([
             Bidirectional(
                 LSTM(64,  # Reduced units since we're using bidirectional
@@ -253,7 +264,7 @@ class VortexLSTMModel:
         
         model.compile(
             optimizer=Adam(learning_rate=0.001),
-            loss=self.focal_loss(gamma=gamma, alpha=alpha),
+            loss=self.temporal_focal_loss(gamma=gamma, alpha=alpha, temporal_weight=0.4),  # Increased from 0.2 to 0.4
             metrics=['accuracy', 
                     tf.keras.metrics.AUC(curve='ROC', name='roc_auc'),
                     tf.keras.metrics.AUC(curve='PR', name='pr_auc')]
@@ -981,7 +992,7 @@ def main():
         print("\nLoading existing model...")
         model.model = tf.keras.models.load_model(
             model_path,
-            custom_objects={'focal_loss_fixed': model.focal_loss()}
+            custom_objects={'temporal_focal_loss': model.temporal_focal_loss()}
         )
         print("Model loaded successfully")
     else:
