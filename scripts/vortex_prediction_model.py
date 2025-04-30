@@ -3,172 +3,111 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from joblib import dump, load
-import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.metrics import (
-    precision_score, recall_score, f1_score, classification_report, confusion_matrix
+    precision_score, recall_score, f1_score,
+    classification_report, confusion_matrix
 )
-
+import matplotlib.pyplot as plt
 from vortexdetect.feature_processor import FeatureProcessor
 
-# === Config ===
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_FILE = BASE_DIR / "data" / "ml_ready_vortex_data.csv"
-FEATURES_FILE = BASE_DIR / "data" / "ml_ready_features.csv"
+FEATURE_DIR = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "models"
 RESULTS_DIR = BASE_DIR / "results"
-LOOKAHEAD = 10
 THRESHOLD_STEP = 0.01
+LOOKAHEAD = 10
 
+def prepare_data(df, processor, window_size, features_file):
+    if features_file.exists():
+        print(f"Loading features for window {window_size}...")
+        return pd.read_csv(features_file)
 
-def prepare_data(df, feature_processor, force_recalculate=False):
-    if FEATURES_FILE.exists() and not force_recalculate:
-        print("Loading precomputed features...")
-        return pd.read_csv(FEATURES_FILE)
-
-    print("Recomputing features...")
+    print(f"Recomputing features for window {window_size}...")
     features = []
-
-    for i in range(50, len(df) - LOOKAHEAD):
-        window = df.iloc[i - 50:i]
-        label = 1 if any(df["gt_detection_win"].iloc[i:i + LOOKAHEAD]) else 0
-        feats = feature_processor.compute_features(window)
+    for i in range(window_size, len(df) - LOOKAHEAD):
+        window = df.iloc[i - window_size:i]
+        label = 1 if df["gt_detection_win"].iloc[i:i + LOOKAHEAD].any() else 0
+        feats = processor.compute_features(window)
         feats["ml_label"] = label
         features.append(feats)
-
     result_df = pd.DataFrame(features)
-    FEATURES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    result_df.to_csv(FEATURES_FILE, index=False)
+    result_df.to_csv(features_file, index=False)
     return result_df
 
-
-def train_model(X_train, y_train, model_type="xgboost"):
-    print(f"Training {model_type.upper()} model...")
-
-    if model_type == "rf":
-        model = RandomForestClassifier(
-            n_estimators=100,
-            class_weight='balanced',
-            random_state=42
-        )
-    else:
-        ratio = np.sum(y_train == 0) / np.sum(y_train == 1)
-        model = XGBClassifier(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=5,
-            scale_pos_weight=ratio,
-            use_label_encoder=False,
-            eval_metric="logloss",
-            random_state=42
-        )
-
-    model.fit(X_train, y_train)
+def train_model(X, y):
+    pos_weight = (len(y) - sum(y)) / sum(y)
+    model = XGBClassifier(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=5,
+        use_label_encoder=False,
+        eval_metric="logloss",
+        scale_pos_weight=pos_weight,
+        random_state=42
+    )
+    model.fit(X, y)
     return model
 
-
-def evaluate(model, X_test, y_test, save_dir, model_type):
-    y_probs = model.predict_proba(X_test)[:, 1]
-    thresholds = np.arange(0.01, 0.51, 0.01)
-    metrics_by_threshold = []
+def evaluate(model, X_test, y_test, window_size, result_path):
+    y_prob = model.predict_proba(X_test)[:, 1]
+    thresholds = np.arange(0, 1.01, THRESHOLD_STEP)
+    results = []
 
     for t in thresholds:
-        y_pred = (y_probs >= t).astype(int)
-        metrics_by_threshold.append([
-            t,
-            precision_score(y_test, y_pred, zero_division=0),
-            recall_score(y_test, y_pred, zero_division=0),
-            f1_score(y_test, y_pred, zero_division=0)
-        ])
+        y_pred = (y_prob >= t).astype(int)
+        f1 = f1_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred)
+        rec = recall_score(y_test, y_pred)
+        results.append((t, prec, rec, f1))
 
-    result_path = save_dir / f"{model_type}"
-    result_path.mkdir(parents=True, exist_ok=True)
+    best_t, best_p, best_r, best_f1 = max(results, key=lambda x: x[3])
+    print(f"\nBest threshold based on F1: {best_t:.2f}")
 
-    df_metrics = pd.DataFrame(metrics_by_threshold, columns=["Threshold", "Precision", "Recall", "F1"])
-    df_metrics.to_csv(result_path / "threshold_metrics.csv", index=False)
+    df_plot = pd.DataFrame(results, columns=["Threshold", "Precision", "Recall", "F1"])
+    df_plot.to_csv(result_path / f"thresholds_window_{window_size}.csv", index=False)
 
-    best_row = df_metrics.sort_values("F1", ascending=False).iloc[0]
-    best_thresh = best_row["Threshold"]
-    print(f"\nBest threshold based on F1: {best_thresh:.2f}")
-
-    # Final evaluation at best threshold
-    y_pred = (y_probs >= best_thresh).astype(int)
-
-    print("\nClassification Report:")
-    print(classification_report(y_test, y_pred))
-    print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred))
-
-    pd.DataFrame([{
-        "precision": best_row["Precision"],
-        "recall": best_row["Recall"],
-        "f1": best_row["F1"],
-        "threshold": best_thresh
-    }]).to_csv(result_path / "model_metrics.csv", index=False)
-
-    with open(result_path / "classification_report.txt", "w") as f:
-        f.write(classification_report(y_test, y_pred))
-
-    # Plot threshold tuning
-    plt.figure(figsize=(10, 6))
-    plt.plot(df_metrics["Threshold"], df_metrics["F1"], label="F1 Score", marker='o')
-    plt.plot(df_metrics["Threshold"], df_metrics["Precision"], label="Precision", linestyle='--')
-    plt.plot(df_metrics["Threshold"], df_metrics["Recall"], label="Recall", linestyle='--')
+    plt.figure()
+    plt.plot(df_plot["Threshold"], df_plot["F1"], label="F1")
+    plt.plot(df_plot["Threshold"], df_plot["Precision"], label="Precision")
+    plt.plot(df_plot["Threshold"], df_plot["Recall"], label="Recall")
+    plt.title(f"Threshold Tuning (Window {window_size})")
     plt.xlabel("Threshold")
     plt.ylabel("Score")
-    plt.title(f"Threshold Tuning - {model_type.upper()}")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(result_path / "threshold_tuning.png")
+    plt.savefig(result_path / f"threshold_plot_window_{window_size}.png")
     plt.close()
 
-    return {
-        "precision": best_row["Precision"],
-        "recall": best_row["Recall"],
-        "f1": best_row["F1"],
-        "threshold": best_thresh
-    }
-
+    return df_plot
 
 def main(args):
-    model_type = args.model.lower()
-    print("Loading raw time-series data...")
     df = pd.read_csv(DATA_FILE)
     processor = FeatureProcessor()
 
-    print("Preparing features and labels...")
-    data = prepare_data(df, processor, force_recalculate=args.force_recalculate)
-    data = data.dropna()
-    X = data.drop(columns=["ml_label"])
-    y = data["ml_label"]
+    for window_size in args.windows:
+        print(f"\n Window size: {window_size}")
+        features_file = FEATURE_DIR / f"ml_ready_features_win_{window_size}.csv"
+        data = prepare_data(df, processor, window_size, features_file).dropna()
+        X = data.drop(columns=["ml_label"])
+        y = data["ml_label"]
 
-    split = int(len(X) * args.data_fraction)
-    X_train, X_test = X.iloc[:split], X.iloc[split:]
-    y_train, y_test = y.iloc[:split], y.iloc[split:]
+        split = int(len(X) * args.train_ratio)
+        X_train, X_test = X.iloc[:split], X.iloc[split:]
+        y_train, y_test = y.iloc[:split], y.iloc[split:]
 
-    model_file = MODEL_DIR / f"{model_type}_vortex_model.joblib"
-
-    if model_file.exists() and not args.force_retrain:
-        print("Loading existing model...")
-        model = load(model_file)
-    else:
-        model = train_model(X_train, y_train, model_type=model_type)
+        model = train_model(X_train, y_train)
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        dump(model, model_file)
-        print(f"Model saved to {model_file}")
+        dump(model, MODEL_DIR / f"xgb_model_win_{window_size}.joblib")
 
-    print("Evaluating model...")
-    evaluate(model, X_test, y_test, RESULTS_DIR, model_type)
-
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        evaluate(model, X_test, y_test, window_size, RESULTS_DIR)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Vortex Prediction Model Trainer")
-    parser.add_argument("--model", type=str, default="xgboost", choices=["xgboost", "rf"],
-                        help="Choose model type: 'xgboost' or 'rf'")
-    parser.add_argument("--force-recalculate", action="store_true", help="Recompute features from raw data")
-    parser.add_argument("--force-retrain", action="store_true", help="Retrain model from scratch")
-    parser.add_argument("--data-fraction", type=float, default=0.8, help="Fraction of data to use for training")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--windows", nargs="+", type=int, default=[50, 60, 70, 80, 100])
+    parser.add_argument("--train-ratio", type=float, default=0.8)
     args = parser.parse_args()
-
     main(args)
