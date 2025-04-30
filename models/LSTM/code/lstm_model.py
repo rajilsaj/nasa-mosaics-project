@@ -8,7 +8,6 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras import mixed_precision
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
 from pathlib import Path
 import time
 import argparse
@@ -26,14 +25,24 @@ mixed_precision.set_global_policy("mixed_float16")
 sys.path.append(str(Path(__file__).parent.parent.parent.parent / 'utils'))
 from visualize_lstm_metrics import visualize_lstm_metrics, create_lstm_report
 
+def debug_print(debug: bool, *args, **kwargs):
+    """Print debug information if debug flag is set."""
+    if debug:
+        print(*args, **kwargs)
+
 class VortexLSTMModel:
     """Single-stage LSTM model for vortex prediction."""
     
-    def __init__(self, window_size: int = 60, prediction_threshold: float = 0.2):
+    def __init__(self, window_size: int = 60, prediction_threshold: float = 0.2, debug: bool = False):
         """Initialize the LSTM model."""
         self.window_size = window_size
         self.prediction_threshold = prediction_threshold
         self.model = None
+        self.debug = debug
+        
+    def debug_print(self, *args, **kwargs):
+        """Print debug information if debug flag is set."""
+        debug_print(self.debug, *args, **kwargs)
         
     def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True) -> tuple:
         """Prepare sequences for vortex prediction.
@@ -61,30 +70,30 @@ class VortexLSTMModel:
         roc_std = np.std(rate_of_change)
         normalized_roc = (rate_of_change - roc_mean) / roc_std
         
-        print("\nNormalization statistics:")
-        print(f"Pressure - Mean: {pressure_mean:.2f}, Std: {pressure_std:.2f}")
-        print(f"Rate of Change - Mean: {roc_mean:.2f}, Std: {roc_std:.2f}")
+        self.debug_print("\nNormalization statistics:")
+        self.debug_print(f"Pressure - Mean: {pressure_mean:.2f}, Std: {pressure_std:.2f}")
+        self.debug_print(f"Rate of Change - Mean: {roc_mean:.2f}, Std: {roc_std:.2f}")
         
         if not apply_sampling:
-            # For test/eval: process all available data
-            print("\nProcessing all available data for test/evaluation...")
+            # For test/eval: process all available data using sliding window
+            self.debug_print("\nProcessing all available data for test/evaluation using sliding window...")
             sequences_list = []
             labels_list = []
             
-            # Create sequences for every possible window
-            for i in range(self.window_size, len(data) - self.window_size + 1):
-                # Get the window
-                pressure_window = normalized_pressure[i:i+self.window_size]
-                roc_window = normalized_roc[i:i+self.window_size]
+            # Create sequences for every point using sliding window
+            for i in range(self.window_size, len(data)):
+                # Get the window of previous points
+                pressure_window = normalized_pressure[i-self.window_size:i]
+                roc_window = normalized_roc[i-self.window_size:i]
                 
                 # Create sequence
                 sequence = np.zeros((self.window_size, 2))
                 sequence[:, 0] = pressure_window
                 sequence[:, 1] = roc_window
                 
-                # Get label (1 if any point in the window is a vortex)
-                label = 1 if np.any(np.logical_or(gt_detection[i:i+self.window_size] == 1, 
-                                                gt_fwhm[i:i+self.window_size] == 1)) else 0
+                # Label: 1 if ANY point in this window is a vortex
+                label = 1 if np.any(np.logical_or(gt_detection[i-self.window_size:i] == 1, 
+                                                gt_fwhm[i-self.window_size:i] == 1)) else 0
                 
                 sequences_list.append(sequence)
                 labels_list.append(label)
@@ -92,11 +101,11 @@ class VortexLSTMModel:
             sequences = np.array(sequences_list)
             labels = np.array(labels_list)
             
-            print("\nFull data statistics:")
-            print(f"Total sequences: {len(sequences)}")
-            print(f"Vortex sequences: {sum(labels)}")
-            print(f"Non-vortex sequences: {len(labels) - sum(labels)}")
-            print(f"Ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
+            self.debug_print("\nFull data statistics:")
+            self.debug_print(f"Total sequences: {len(sequences)}")
+            self.debug_print(f"Vortex windows: {sum(labels)}")
+            self.debug_print(f"Non-vortex windows: {len(labels) - sum(labels)}")
+            self.debug_print(f"Ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
             
             return sequences, labels
         
@@ -106,18 +115,18 @@ class VortexLSTMModel:
         
         # Find all vortex events
         vortex_indices = np.where(gt_combined == 1)[0]
-        print(f"\nFound {len(vortex_indices)} vortex events")
+        self.debug_print(f"\nFound {len(vortex_indices)} vortex events")
         
         # Debug: Print first few vortex indices and their values
-        print("\nFirst few vortex events (normalized):")
+        self.debug_print("\nFirst few vortex events (normalized):")
         for i in range(min(5, len(vortex_indices))):
             idx = vortex_indices[i]
-            print(f"Index {idx}:")
-            print(f"  Normalized Pressure: {normalized_pressure[idx]:.4f}")
-            print(f"  Normalized ROC: {normalized_roc[idx]:.4f}")
-            print(f"  gt_detection_win: {gt_detection[idx]}")
-            print(f"  gt_fwhm: {gt_fwhm[idx]}")
-            print(f"  Combined: {gt_combined[idx]}")
+            self.debug_print(f"Index {idx}:")
+            self.debug_print(f"  Normalized Pressure: {normalized_pressure[idx]:.4f}")
+            self.debug_print(f"  Normalized ROC: {normalized_roc[idx]:.4f}")
+            self.debug_print(f"  gt_detection_win: {gt_detection[idx]}")
+            self.debug_print(f"  gt_fwhm: {gt_fwhm[idx]}")
+            self.debug_print(f"  Combined: {gt_combined[idx]}")
         
         sequences_list = []
         labels_list = []
@@ -125,7 +134,7 @@ class VortexLSTMModel:
         # Process each vortex event
         for i, vortex_idx in enumerate(vortex_indices):
             if i % 1000 == 0:
-                print(f"Processing vortex event {i}/{len(vortex_indices)}")
+                self.debug_print(f"Processing vortex event {i}/{len(vortex_indices)}")
             
             # Skip if we don't have enough data before the vortex
             if vortex_idx < self.window_size:
@@ -159,15 +168,15 @@ class VortexLSTMModel:
             
             # Debug: Print first few sequences
             if i < 2:
-                print(f"\nSequence {i}:")
-                print("Non-vortex window (normalized):")
-                print(f"  Start idx: {non_vortex_start}, End idx: {non_vortex_end}")
-                print(f"  Pressure values: {non_vortex_pressure[:5]}...")
-                print(f"  ROC values: {non_vortex_roc[:5]}...")
-                print("\nVortex window (normalized):")
-                print(f"  Start idx: {vortex_start}, End idx: {vortex_end}")
-                print(f"  Pressure values: {vortex_pressure[:5]}...")
-                print(f"  ROC values: {vortex_roc[:5]}...")
+                self.debug_print(f"\nSequence {i}:")
+                self.debug_print("Non-vortex window (normalized):")
+                self.debug_print(f"  Start idx: {non_vortex_start}, End idx: {non_vortex_end}")
+                self.debug_print(f"  Pressure values: {non_vortex_pressure[:5]}...")
+                self.debug_print(f"  ROC values: {non_vortex_roc[:5]}...")
+                self.debug_print("\nVortex window (normalized):")
+                self.debug_print(f"  Start idx: {vortex_start}, End idx: {vortex_end}")
+                self.debug_print(f"  Pressure values: {vortex_pressure[:5]}...")
+                self.debug_print(f"  ROC values: {vortex_roc[:5]}...")
             
             # Add both sequences
             sequences_list.extend([non_vortex_sequence, vortex_sequence])
@@ -177,15 +186,15 @@ class VortexLSTMModel:
         sequences = np.array(sequences_list)
         labels = np.array(labels_list)
         
-        print("\nFinal sequence statistics:")
-        print(f"Total sequences: {len(sequences)}")
-        print(f"Vortex sequences: {sum(labels)}")
-        print(f"Non-vortex sequences: {len(labels) - sum(labels)}")
-        print(f"Final ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
+        self.debug_print("\nFinal sequence statistics:")
+        self.debug_print(f"Total sequences: {len(sequences)}")
+        self.debug_print(f"Vortex sequences: {sum(labels)}")
+        self.debug_print(f"Non-vortex sequences: {len(labels) - sum(labels)}")
+        self.debug_print(f"Final ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
         
         return sequences, labels
         
-    def focal_loss(self, gamma=2.0, alpha=0.95):
+    def focal_loss(self, gamma=2.0, alpha=0.5):
         def focal_loss_fixed(y_true, y_pred):
             y_true = tf.cast(y_true, tf.float32)
             epsilon = 1e-7
@@ -206,14 +215,13 @@ class VortexLSTMModel:
         n_negative = np.sum(y_train == 0)
         total = n_positive + n_negative
         
-        # Alpha is the inverse of the positive class frequency
-        # This gives higher weight to the positive class (vortices)
+        # Back to dynamic calculation based on class distribution
         alpha = n_negative / total
         
-        print(f"\nClass distribution for alpha calculation:")
-        print(f"Positive examples (vortices): {n_positive}")
-        print(f"Negative examples (non-vortices): {n_negative}")
-        print(f"Calculated alpha: {alpha:.4f}")
+        self.debug_print(f"\nClass distribution for alpha calculation:")
+        self.debug_print(f"Positive examples (vortices): {n_positive}")
+        self.debug_print(f"Negative examples (non-vortices): {n_negative}")
+        self.debug_print(f"Calculated alpha: {alpha:.4f}")
         
         return alpha
     
@@ -242,47 +250,47 @@ class VortexLSTMModel:
     def train(self, X_train, y_train, X_val, y_val, epochs=50, batch_size=256):
         """Train the model."""
         # Print statistics about the data
-        print("\nTraining Data Statistics:")
-        print(f"Total examples: {len(X_train)}")
-        print(f"Vortex examples: {sum(y_train)}")
-        print(f"Non-vortex examples: {len(y_train) - sum(y_train)}")
-        print(f"Ratio: {(len(y_train) - sum(y_train)) / sum(y_train):.2f}:1")
+        self.debug_print("\nTraining Data Statistics:")
+        self.debug_print(f"Total examples: {len(X_train)}")
+        self.debug_print(f"Vortex examples: {sum(y_train)}")
+        self.debug_print(f"Non-vortex examples: {len(y_train) - sum(y_train)}")
+        self.debug_print(f"Ratio: {(len(y_train) - sum(y_train)) / sum(y_train):.2f}:1")
         
         # Add detailed debugging
-        print("\nVerifying sampling results:")
+        self.debug_print("\nVerifying sampling results:")
         vortex_indices = np.where(y_train == 1)[0]
         non_vortex_indices = np.where(y_train == 0)[0]
-        print(f"Number of vortex sequences: {len(vortex_indices)}")
-        print(f"Number of non-vortex sequences: {len(non_vortex_indices)}")
-        print(f"First few vortex indices: {vortex_indices[:10]}")
+        self.debug_print(f"Number of vortex sequences: {len(vortex_indices)}")
+        self.debug_print(f"Number of non-vortex sequences: {len(non_vortex_indices)}")
+        self.debug_print(f"First few vortex indices: {vortex_indices[:10]}")
         
         # Check distribution in first few sequences
-        print("\nChecking first few sequences:")
+        self.debug_print("\nChecking first few sequences:")
         for i in range(min(20, len(y_train))):
-            print(f"Sequence {i}: Label = {y_train[i]}")
+            self.debug_print(f"Sequence {i}: Label = {y_train[i]}")
         
-        print("\nValidation Data Statistics:")
-        print(f"Total examples: {len(X_val)}")
-        print(f"Vortex examples: {sum(y_val)}")
-        print(f"Non-vortex examples: {len(y_val) - sum(y_val)}")
-        print(f"Ratio: {(len(y_val) - sum(y_val)) / sum(y_val):.2f}:1")
+        self.debug_print("\nValidation Data Statistics:")
+        self.debug_print(f"Total examples: {len(X_val)}")
+        self.debug_print(f"Vortex examples: {sum(y_val)}")
+        self.debug_print(f"Non-vortex examples: {len(y_val) - sum(y_val)}")
+        self.debug_print(f"Ratio: {(len(y_val) - sum(y_val)) / sum(y_val):.2f}:1")
         
         # Add logging for class weights
-        print("\nVerifying class weights in training batches...")
+        self.debug_print("\nVerifying class weights in training batches...")
         for i in range(0, len(X_train), batch_size):
             batch_y = y_train[i:i+batch_size]
             pos_weight = np.sum(batch_y == 1) / len(batch_y)
             neg_weight = np.sum(batch_y == 0) / len(batch_y)
-            print(f"Batch {i//batch_size}: Positive weight: {pos_weight:.4f}, Negative weight: {neg_weight:.4f}")
+            self.debug_print(f"Batch {i//batch_size}: Positive weight: {pos_weight:.4f}, Negative weight: {neg_weight:.4f}")
             if i > batch_size * 5:  # Only print first 5 batches
                 break
         
         # Calculate alpha based on class distribution
         alpha = self.calculate_alpha(y_train)
-        print(f"Alpha: {alpha}")
+        self.debug_print(f"Alpha: {alpha}")
         
         # Train model
-        print("\nTraining vortex prediction model...")
+        self.debug_print("\nTraining vortex prediction model...")
         self.model = self.build_model((self.window_size, 2), alpha=alpha)
         
         # Add learning rate scheduler
@@ -345,8 +353,8 @@ class VortexLSTMModel:
                 best_f1 = f1
                 best_threshold = threshold
         
-        print(f"\nBest threshold: {best_threshold:.4f}")
-        print(f"Best F1 score: {best_f1:.4f}")
+        self.debug_print(f"\nBest threshold: {best_threshold:.4f}")
+        self.debug_print(f"Best F1 score: {best_f1:.4f}")
         
         # Use the best threshold for final evaluation
         y_pred = (y_pred_proba >= best_threshold).astype(int)
@@ -365,25 +373,336 @@ class VortexLSTMModel:
             'pr_auc': pr_auc,
             'y_pred': y_pred,
             'y_pred_proba': y_pred_proba,
-            'threshold': best_threshold
+            'threshold': best_threshold,
+            'y_true': y_test  # Added ground truth labels
+        }
+    
+    def extract_event_ranges(self, gt_detection_win, gt_fwhm):
+        """Extract ranges of vortex events from ground truth."""
+        # Combine both ground truth conditions
+        gt = np.logical_or(gt_detection_win == 1, gt_fwhm == 1)
+        events = []
+        in_event = False
+        for i in range(len(gt)):
+            if gt[i] and not in_event:
+                start = i
+                in_event = True
+            elif not gt[i] and in_event:
+                end = i - 1
+                events.append((start, end))
+                in_event = False
+        if in_event:
+            events.append((start, len(gt) - 1))
+        return events
+
+    def evaluate_event_level(self, y_pred, window_starts, window_size, events):
+        """Evaluate predictions at the event level."""
+        matched_events = set()
+        used_preds = set()
+        tp = 0
+        fp = 0
+        earliness = []
+
+        for i, pred in enumerate(y_pred):
+            if pred == 1:
+                win_range = set(range(window_starts[i], window_starts[i] + window_size))
+                matched = False
+                for j, (start, end) in enumerate(events):
+                    if j in matched_events:
+                        continue  # already counted
+                    event_range = set(range(start, end + 1))
+                    if win_range & event_range:
+                        tp += 1
+                        matched_events.add(j)
+                        matched = True
+                        # Calculate earliness
+                        pred_times = [window_starts[i] for i, p in enumerate(y_pred) if p == 1 and window_starts[i] >= start]
+                        if pred_times:
+                            earliness.append(pred_times[0] - start)
+                        break
+                if not matched:
+                    fp += 1
+
+        fn = len(events) - len(matched_events)
+        return tp, fp, fn, earliness
+
+    def evaluate_with_windows(self, test_results, gt_windows, test_data):
+        """Evaluate model performance considering ground truth windows.
+        
+        Args:
+            test_results: Dictionary containing original test results (y_pred, y_pred_proba, y_true)
+            gt_windows: List of (start_idx, end_idx) tuples for ground truth windows
+            test_data: Original test data DataFrame containing gt_detection_win
+        """
+        from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
+        import matplotlib.pyplot as plt
+        
+        self.debug_print("\nDebug: Window-based evaluation")
+        self.debug_print(f"Number of ground truth windows: {len(gt_windows)}")
+        self.debug_print(f"First few windows: {gt_windows[:5]}")
+        
+        # Get original predictions from test_results
+        y_pred = test_results['y_pred']
+        y_pred_proba = test_results['y_pred_proba']
+        y_test = test_results['y_true']
+        
+        # Create window starts array (since we're using stride=1)
+        window_starts = np.arange(self.window_size, len(test_data))
+        
+        # Extract event ranges from ground truth
+        events = self.extract_event_ranges(test_data['gt_detection_win'].values, test_data['gt_fwhm'].values)
+        
+        # Evaluate at event level
+        tp, fp, fn, earliness = self.evaluate_event_level(y_pred, window_starts, self.window_size, events)
+        
+        # Calculate event-level metrics
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        
+        # Debug output
+        self.debug_print("\nEvent-level evaluation:")
+        self.debug_print(f"True Positives: {tp}")
+        self.debug_print(f"False Positives: {fp}")
+        self.debug_print(f"False Negatives: {fn}")
+        self.debug_print(f"Precision: {precision:.4f}")
+        self.debug_print(f"Recall: {recall:.4f}")
+        self.debug_print(f"F1-Score: {f1:.4f}")
+        
+        if earliness:
+            self.debug_print(f"\nEarliness statistics:")
+            self.debug_print(f"Mean earliness: {np.mean(earliness):.2f} points")
+            self.debug_print(f"Min earliness: {np.min(earliness):.2f} points")
+            self.debug_print(f"Max earliness: {np.max(earliness):.2f} points")
+        
+        # Calculate original point-by-point metrics for comparison
+        original_metrics = {
+            'precision': precision_score(y_test, y_pred, zero_division=0),
+            'recall': recall_score(y_test, y_pred, zero_division=0),
+            'f1': f1_score(y_test, y_pred, zero_division=0),
+            'roc_auc': roc_auc_score(y_test, y_pred_proba) if len(np.unique(y_test)) > 1 else 0.0,
+            'pr_auc': average_precision_score(y_test, y_pred_proba)
+        }
+        
+        self.debug_print("\nOriginal point-by-point metrics:")
+        self.debug_print(f"Precision: {original_metrics['precision']:.4f}")
+        self.debug_print(f"Recall: {original_metrics['recall']:.4f}")
+        self.debug_print(f"F1-Score: {original_metrics['f1']:.4f}")
+        self.debug_print(f"ROC-AUC: {original_metrics['roc_auc']:.4f}")
+        self.debug_print(f"PR-AUC: {original_metrics['pr_auc']:.4f}")
+        
+        # Plot confidence distribution
+        plot_confidence_distribution(y_test, y_pred_proba)
+        
+        # Plot confidence timeline
+        plot_confidence_timeline(test_data, y_pred_proba, gt_windows)
+        
+        return {
+            'original_metrics': original_metrics,
+            'event_metrics': {
+                'precision': precision,
+                'recall': recall,
+                'f1': f1,
+                'tp': tp,
+                'fp': fp,
+                'fn': fn,
+                'earliness': earliness
+            },
+            'y_pred': y_pred,
+            'y_pred_proba': y_pred_proba
         }
 
-def find_detection_windows(data: pd.DataFrame) -> list:
-    """Find all detection windows (where gt_detection_win == 1)."""
+    def analyze_learned_patterns(self, data: pd.DataFrame, y_pred: np.ndarray, window_size: int = 60):
+        """Analyze what patterns the model is learning."""
+        import matplotlib.pyplot as plt
+        
+        # Get indices where model predicted vortex
+        pred_vortex_indices = np.where(y_pred == 1)[0]
+        
+        # Get indices of actual vortices
+        gt_combined = np.logical_or(data['gt_detection_win'] == 1, data['gt_fwhm'] == 1)
+        true_vortex_indices = np.where(gt_combined)[0]
+        
+        # Collect pressure patterns
+        pred_vortex_patterns = []
+        true_vortex_patterns = []
+        
+        # Get patterns for predicted vortices
+        for idx in pred_vortex_indices:
+            if idx >= window_size and idx + window_size < len(data):
+                pattern = data['PRESSURE'].iloc[idx-window_size:idx+window_size].values
+                pred_vortex_patterns.append(pattern)
+        
+        # Get patterns for true vortices
+        for idx in true_vortex_indices:
+            if idx >= window_size and idx + window_size < len(data):
+                pattern = data['PRESSURE'].iloc[idx-window_size:idx+window_size].values
+                true_vortex_patterns.append(pattern)
+        
+        # Convert to numpy arrays
+        pred_vortex_patterns = np.array(pred_vortex_patterns)
+        true_vortex_patterns = np.array(true_vortex_patterns)
+        
+        # Calculate statistics
+        mean_pred = np.mean(pred_vortex_patterns, axis=0)
+        mean_true = np.mean(true_vortex_patterns, axis=0)
+        std_pred = np.std(pred_vortex_patterns, axis=0)
+        std_true = np.std(true_vortex_patterns, axis=0)
+        
+        # Plot the patterns
+        plt.figure(figsize=(15, 10))
+        
+        # Plot mean patterns
+        plt.subplot(2, 1, 1)
+        plt.plot(mean_pred, label='Predicted Vortex Pattern', color='red')
+        plt.plot(mean_true, label='True Vortex Pattern', color='blue')
+        plt.fill_between(range(len(mean_pred)), 
+                        mean_pred - std_pred, 
+                        mean_pred + std_pred, 
+                        color='red', alpha=0.2)
+        plt.fill_between(range(len(mean_true)), 
+                        mean_true - std_true, 
+                        mean_true + std_true, 
+                        color='blue', alpha=0.2)
+        plt.title('Mean Pressure Patterns')
+        plt.xlabel('Time Steps')
+        plt.ylabel('Pressure')
+        plt.legend()
+        
+        # Plot difference
+        plt.subplot(2, 1, 2)
+        plt.plot(mean_pred - mean_true, label='Difference (Pred - True)', color='green')
+        plt.title('Difference Between Predicted and True Patterns')
+        plt.xlabel('Time Steps')
+        plt.ylabel('Pressure Difference')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig('learned_patterns.png')
+        plt.close()
+        
+        # Print statistics
+        print("\nPattern Analysis:")
+        print(f"Number of predicted vortex patterns: {len(pred_vortex_patterns)}")
+        print(f"Number of true vortex patterns: {len(true_vortex_patterns)}")
+        print(f"Mean pressure in predicted patterns: {np.mean(mean_pred):.2f} ± {np.mean(std_pred):.2f}")
+        print(f"Mean pressure in true patterns: {np.mean(mean_true):.2f} ± {np.mean(std_true):.2f}")
+        print(f"Max difference between patterns: {np.max(np.abs(mean_pred - mean_true)):.2f}")
+        print(f"Average difference between patterns: {np.mean(np.abs(mean_pred - mean_true)):.2f}")
+        
+        # Analyze rate of change patterns
+        pred_roc_patterns = []
+        true_roc_patterns = []
+        
+        # Get ROC patterns for predicted vortices
+        for idx in pred_vortex_indices:
+            if idx >= window_size and idx + window_size < len(data):
+                pattern = np.diff(data['PRESSURE'].iloc[idx-window_size:idx+window_size].values)
+                pred_roc_patterns.append(pattern)
+        
+        # Get ROC patterns for true vortices
+        for idx in true_vortex_indices:
+            if idx >= window_size and idx + window_size < len(data):
+                pattern = np.diff(data['PRESSURE'].iloc[idx-window_size:idx+window_size].values)
+                true_roc_patterns.append(pattern)
+        
+        # Convert to numpy arrays
+        pred_roc_patterns = np.array(pred_roc_patterns)
+        true_roc_patterns = np.array(true_roc_patterns)
+        
+        # Calculate statistics
+        mean_pred_roc = np.mean(pred_roc_patterns, axis=0)
+        mean_true_roc = np.mean(true_roc_patterns, axis=0)
+        std_pred_roc = np.std(pred_roc_patterns, axis=0)
+        std_true_roc = np.std(true_roc_patterns, axis=0)
+        
+        # Plot ROC patterns
+        plt.figure(figsize=(15, 10))
+        
+        # Plot mean ROC patterns
+        plt.subplot(2, 1, 1)
+        plt.plot(mean_pred_roc, label='Predicted Vortex ROC', color='red')
+        plt.plot(mean_true_roc, label='True Vortex ROC', color='blue')
+        plt.fill_between(range(len(mean_pred_roc)), 
+                        mean_pred_roc - std_pred_roc, 
+                        mean_pred_roc + std_pred_roc, 
+                        color='red', alpha=0.2)
+        plt.fill_between(range(len(mean_true_roc)), 
+                        mean_true_roc - std_true_roc, 
+                        mean_true_roc + std_true_roc, 
+                        color='blue', alpha=0.2)
+        plt.title('Mean Rate of Change Patterns')
+        plt.xlabel('Time Steps')
+        plt.ylabel('Rate of Change')
+        plt.legend()
+        
+        # Plot ROC difference
+        plt.subplot(2, 1, 2)
+        plt.plot(mean_pred_roc - mean_true_roc, label='Difference (Pred - True)', color='green')
+        plt.title('Difference Between Predicted and True ROC Patterns')
+        plt.xlabel('Time Steps')
+        plt.ylabel('ROC Difference')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig('learned_roc_patterns.png')
+        plt.close()
+        
+        # Print ROC statistics
+        print("\nROC Pattern Analysis:")
+        print(f"Mean ROC in predicted patterns: {np.mean(mean_pred_roc):.2f} ± {np.mean(std_pred_roc):.2f}")
+        print(f"Mean ROC in true patterns: {np.mean(mean_true_roc):.2f} ± {np.mean(std_true_roc):.2f}")
+        print(f"Max ROC difference between patterns: {np.max(np.abs(mean_pred_roc - mean_true_roc)):.2f}")
+        print(f"Average ROC difference between patterns: {np.mean(np.abs(mean_pred_roc - mean_true_roc)):.2f}")
+
+def find_detection_windows(data: pd.DataFrame, debug: bool = False) -> list:
+    """Find all detection windows (where gt_detection_win == 1 or gt_fwhm == 1)."""
     windows = []
     in_window = False
     start_idx = None
     
-    for idx, row in data.iterrows():
-        if row['gt_detection_win'] == 1 and not in_window:
+    # Combine both ground truth conditions
+    gt_combined = np.logical_or(data['gt_detection_win'] == True, data['gt_fwhm'] == True)
+    
+    debug_print(debug, "\nDebug: Ground truth statistics")
+    debug_print(debug, f"Total points: {len(data)}")
+    debug_print(debug, f"Points with gt_detection_win=1: {sum(data['gt_detection_win'] == True)}")
+    debug_print(debug, f"Points with gt_fwhm=1: {sum(data['gt_fwhm'] == True)}")
+    debug_print(debug, f"Points with either=1: {sum(gt_combined)}")
+    
+    # Print first few rows of data to check values
+    debug_print(debug, "\nFirst few rows of data:")
+    debug_print(debug, data[['gt_detection_win', 'gt_fwhm']].head(10))
+    
+    # Print some random rows where we expect vortices
+    vortex_indices = np.where(gt_combined)[0]
+    if len(vortex_indices) > 0:
+        debug_print(debug, "\nSample vortex rows:")
+        sample_indices = vortex_indices[:5]
+        debug_print(debug, data.iloc[sample_indices][['gt_detection_win', 'gt_fwhm']])
+    
+    # Find windows
+    for idx, is_vortex in enumerate(gt_combined):
+        if is_vortex and not in_window:
             in_window = True
             start_idx = idx
-        elif row['gt_detection_win'] == 0 and in_window:
+        elif not is_vortex and in_window:
             in_window = False
             windows.append((start_idx, idx))
     
     if in_window:
         windows.append((start_idx, len(data)))
+    
+    debug_print(debug, f"\nDebug: Found {len(windows)} vortex windows")
+    if windows:
+        debug_print(debug, f"First few windows: {windows[:5]}")
+        
+        # Print the actual values in the first few windows
+        debug_print(debug, "\nChecking first few windows:")
+        for start, end in windows[:3]:
+            debug_print(debug, f"\nWindow {start}:{end}")
+            debug_print(debug, "gt_detection_win:", data['gt_detection_win'].iloc[start:end].values)
+            debug_print(debug, "gt_fwhm:", data['gt_fwhm'].iloc[start:end].values)
     
     return windows
 
@@ -439,56 +758,44 @@ def plot_confidence_timeline(data, y_pred_proba, detection_windows, save_path='c
 
 def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame) -> dict:
     """Evaluate model performance on the full dataset."""
-    print("\nPreparing sequences from full dataset (no sampling)...")
+    debug_print(model.debug, "\nPreparing sequences from full dataset (no sampling)...")
     X_full, y_full = model.prepare_sequences(data, apply_sampling=False)
     
-    print("Making predictions on full dataset...")
+    debug_print(model.debug, "Making predictions on full dataset...")
     y_pred_proba = model.predict(X_full)
     
-    # Try different thresholds to find the best F1 score
-    best_f1 = 0
-    best_threshold = 0.5
-    thresholds = np.linspace(0.3, 0.7, 41)
+    # Get ground truth windows
+    gt_windows = find_detection_windows(data, debug=model.debug)
     
-    for threshold in thresholds:
-        y_pred = (y_pred_proba >= threshold).astype(int)
-        f1 = f1_score(y_full, y_pred)
-        if f1 > best_f1:
-            best_f1 = f1
-            best_threshold = threshold
+    # Standard evaluation
+    debug_print(model.debug, "\nPerforming standard evaluation...")
+    standard_results = model.evaluate(X_full, y_full)
     
-    print(f"\nBest threshold: {best_threshold:.4f}")
-    print(f"Best F1 score: {best_f1:.4f}")
+    # Window-based evaluation
+    debug_print(model.debug, "\nPerforming window-based evaluation...")
+    window_results = model.evaluate_with_windows(standard_results, gt_windows, data)
     
-    # Use the best threshold for final evaluation
-    y_pred = (y_pred_proba >= best_threshold).astype(int)
+    # Print both results
+    debug_print(model.debug, "\nStandard Evaluation Results:")
+    debug_print(model.debug, f"Precision: {standard_results['precision']:.4f}")
+    debug_print(model.debug, f"Recall: {standard_results['recall']:.4f}")
+    debug_print(model.debug, f"F1-Score: {standard_results['f1']:.4f}")
+    debug_print(model.debug, f"ROC-AUC: {standard_results['roc_auc']:.4f}")
+    debug_print(model.debug, f"PR-AUC: {standard_results['pr_auc']:.4f}")
     
-    from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
-    precision = precision_score(y_full, y_pred)
-    recall = recall_score(y_full, y_pred)
-    f1 = f1_score(y_full, y_pred)
-    roc_auc = roc_auc_score(y_full, y_pred_proba)
-    pr_auc = average_precision_score(y_full, y_pred_proba)
-    
-    # Print class distribution
-    print("\nClass distribution in full dataset:")
-    print(f"Vortex sequences: {sum(y_full)}")
-    print(f"Non-vortex sequences: {len(y_full) - sum(y_full)}")
-    print(f"Ratio: {(len(y_full) - sum(y_full)) / sum(y_full):.2f}:1")
+    debug_print(model.debug, "\nWindow-Based Evaluation Results:")
+    debug_print(model.debug, f"Precision: {window_results['original_metrics']['precision']:.4f}")
+    debug_print(model.debug, f"Recall: {window_results['original_metrics']['recall']:.4f}")
+    debug_print(model.debug, f"F1-Score: {window_results['original_metrics']['f1']:.4f}")
+    debug_print(model.debug, f"ROC-AUC: {window_results['original_metrics']['roc_auc']:.4f}")
+    debug_print(model.debug, f"PR-AUC: {window_results['original_metrics']['pr_auc']:.4f}")
     
     return {
-        'precision': precision,
-        'recall': recall,
-        'f1': f1,
-        'roc_auc': roc_auc,
-        'pr_auc': pr_auc,
-        'y_pred': y_pred,
-        'y_pred_proba': y_pred_proba,
-        'y_true': y_full,
-        'threshold': best_threshold
+        'standard': standard_results,
+        'window_based': window_results
     }
 
-def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60):
+def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60, debug: bool = False):
     """Analyze pressure patterns around vortices vs non-vortices."""
     # Get indices of vortex events
     vortex_indices = np.where(data['gt_detection_win'] == 1)[0]
@@ -518,9 +825,9 @@ def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60):
     vortex_patterns = np.array(vortex_patterns)
     non_vortex_patterns = np.array(non_vortex_patterns)
     
-    print("\nPressure Pattern Analysis:")
-    print(f"Number of vortex patterns analyzed: {len(vortex_patterns)}")
-    print(f"Number of non-vortex patterns analyzed: {len(non_vortex_patterns)}")
+    debug_print(debug, "\nPressure Pattern Analysis:")
+    debug_print(debug, f"Number of vortex patterns analyzed: {len(vortex_patterns)}")
+    debug_print(debug, f"Number of non-vortex patterns analyzed: {len(non_vortex_patterns)}")
     
     # Calculate mean patterns
     mean_vortex = np.mean(vortex_patterns, axis=0)
@@ -560,11 +867,11 @@ def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60):
     plt.close()
     
     # Print some statistics
-    print("\nPattern Statistics:")
-    print(f"Mean pressure in vortex patterns: {np.mean(mean_vortex):.2f} ± {np.mean(std_vortex):.2f}")
-    print(f"Mean pressure in non-vortex patterns: {np.mean(mean_non_vortex):.2f} ± {np.mean(std_non_vortex):.2f}")
-    print(f"Max pressure difference: {np.max(np.abs(mean_vortex - mean_non_vortex)):.2f}")
-    print(f"Average pressure difference: {np.mean(np.abs(mean_vortex - mean_non_vortex)):.2f}")
+    debug_print(debug, "\nPattern Statistics:")
+    debug_print(debug, f"Mean pressure in vortex patterns: {np.mean(mean_vortex):.2f} ± {np.mean(std_vortex):.2f}")
+    debug_print(debug, f"Mean pressure in non-vortex patterns: {np.mean(mean_non_vortex):.2f} ± {np.mean(std_non_vortex):.2f}")
+    debug_print(debug, f"Max pressure difference: {np.max(np.abs(mean_vortex - mean_non_vortex)):.2f}")
+    debug_print(debug, f"Average pressure difference: {np.mean(np.abs(mean_vortex - mean_non_vortex)):.2f}")
 
 def main():
     """Main function to train and evaluate the LSTM model."""
@@ -572,6 +879,7 @@ def main():
     parser.add_argument('--retrain', action='store_true', help='Force retraining of the model')
     parser.add_argument('--analyze', action='store_true', help='Analyze pressure patterns')
     parser.add_argument('--full_eval', action='store_true', help='Run evaluation on full dataset')
+    parser.add_argument('--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
     
     print("Starting LSTM model training...")
@@ -592,25 +900,43 @@ def main():
     
     if args.analyze:
         print("\nAnalyzing pressure patterns...")
-        analyze_pressure_patterns(data)
+        analyze_pressure_patterns(data, debug=args.debug)
         return
     
-    # Split data temporally (70/15/15)
+    # Find all vortex events
+    gt_combined = np.logical_or(data['gt_detection_win'] == 1, data['gt_fwhm'] == 1)
+    vortex_indices = np.where(gt_combined)[0]
+    
+    print("\nVortex event statistics:")
+    print(f"Total vortex events: {len(vortex_indices)}")
+    print(f"First few vortex indices: {vortex_indices[:5]}")
+    
+    # Split data temporally (70/15/15) while preserving vortex events
     n_samples = len(data)
     train_end = int(0.7 * n_samples)
     val_end = int(0.85 * n_samples)
+    
+    # Ensure we have vortex events in each split
+    train_vortices = vortex_indices[vortex_indices < train_end]
+    val_vortices = vortex_indices[(vortex_indices >= train_end) & (vortex_indices < val_end)]
+    test_vortices = vortex_indices[vortex_indices >= val_end]
+    
+    print("\nSplit statistics:")
+    print(f"Training samples: {len(train_vortices)} vortex events")
+    print(f"Validation samples: {len(val_vortices)} vortex events")
+    print(f"Test samples: {len(test_vortices)} vortex events")
     
     train_data = data.iloc[:train_end]
     val_data = data.iloc[train_end:val_end]
     test_data = data.iloc[val_end:]
     
-    print("\nSplit statistics:")
-    print(f"Training samples: {len(train_data)}")
-    print(f"Validation samples: {len(val_data)}")
-    print(f"Test samples: {len(test_data)}")
+    print(f"\nData split sizes:")
+    print(f"Training: {len(train_data)} samples")
+    print(f"Validation: {len(val_data)} samples")
+    print(f"Test: {len(test_data)} samples")
     
     # Initialize model
-    model = VortexLSTMModel(window_size=60)
+    model = VortexLSTMModel(window_size=60, debug=args.debug)
     
     # Prepare sequences for each split
     print("\nPreparing training sequences...")
@@ -666,6 +992,10 @@ def main():
     print(f"ROC-AUC: {test_results['roc_auc']:.4f}")
     print(f"PR-AUC: {test_results['pr_auc']:.4f}")
     
+    # Analyze learned patterns
+    print("\nAnalyzing learned patterns...")
+    model.analyze_learned_patterns(test_data, test_results['y_pred'])
+    
     # Generate test set visualizations
     print("\nGenerating test set visualizations...")
     results_dir = Path(__file__).parent.parent / 'results'
@@ -687,20 +1017,20 @@ def main():
         full_results = evaluate_on_full_dataset(model, data)
         
         print("\nFull Dataset Performance:")
-        print(f"Precision: {full_results['precision']:.4f}")
-        print(f"Recall: {full_results['recall']:.4f}")
-        print(f"F1-Score: {full_results['f1']:.4f}")
-        print(f"ROC-AUC: {full_results['roc_auc']:.4f}")
-        print(f"PR-AUC: {full_results['pr_auc']:.4f}")
+        print(f"Precision: {full_results['standard']['precision']:.4f}")
+        print(f"Recall: {full_results['standard']['recall']:.4f}")
+        print(f"F1-Score: {full_results['standard']['f1']:.4f}")
+        print(f"ROC-AUC: {full_results['standard']['roc_auc']:.4f}")
+        print(f"PR-AUC: {full_results['standard']['pr_auc']:.4f}")
         
         # Generate full dataset visualizations
         print("\nGenerating full dataset visualizations...")
         visualize_lstm_metrics(
             model=model.model,
             X_test=X_full,
-            y_test=full_results['y_true'],
-            y_pred=full_results['y_pred'],
-            y_pred_proba=full_results['y_pred_proba'],
+            y_test=full_results['standard']['y_true'],
+            y_pred=full_results['standard']['y_pred'],
+            y_pred_proba=full_results['standard']['y_pred_proba'],
             model_name='LSTM Model (Full Dataset)',
             save_dir=results_dir
         )
