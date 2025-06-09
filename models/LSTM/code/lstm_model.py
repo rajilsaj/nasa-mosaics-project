@@ -112,6 +112,20 @@ class VortexLSTMModel:
         rate_of_change = np.diff(pressure_values)
         rate_of_change = np.concatenate([[0], rate_of_change])
         
+        # Only calculate normalization statistics if not provided (training data)
+        if pressure_mean is None or pressure_std is None:
+            pressure_mean = np.mean(pressure_values)
+            pressure_std = np.std(pressure_values)
+            roc_mean = np.mean(rate_of_change)
+            roc_std = np.std(rate_of_change)
+            self.debug_print("\nCalculated normalization statistics from training data:")
+            self.debug_print(f"Pressure - Mean: {pressure_mean:.2f}, Std: {pressure_std:.2f}")
+            self.debug_print(f"Rate of Change - Mean: {roc_mean:.2f}, Std: {roc_std:.2f}")
+        
+        # Normalize using provided or calculated statistics
+        normalized_pressure = (pressure_values - pressure_mean) / pressure_std
+        normalized_roc = (rate_of_change - roc_mean) / roc_std
+        
         # Calculate rolling features
         rolling_mean, rolling_std, rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std = \
             self.calculate_rolling_features(
@@ -122,114 +136,72 @@ class VortexLSTMModel:
                 rolling_std_std=rolling_std_std
             )
         
-        # Only calculate normalization statistics if not provided (training data)
-        if pressure_mean is None or pressure_std is None:
-            pressure_mean = np.mean(pressure_values)
-            pressure_std = np.std(pressure_values)
-            roc_mean = np.mean(rate_of_change)
-            roc_std = np.std(rate_of_change)
-            
-            self.debug_print("\nCalculated normalization statistics from training data:")
-            self.debug_print(f"Pressure - Mean: {pressure_mean:.2f}, Std: {pressure_std:.2f}")
-            self.debug_print(f"Rate of Change - Mean: {roc_mean:.2f}, Std: {roc_std:.2f}")
-        
-        # Normalize using provided or calculated statistics
-        normalized_pressure = (pressure_values - pressure_mean) / pressure_std
-        normalized_roc = (rate_of_change - roc_mean) / roc_std
-        
         if not apply_sampling:
-            # For test/eval: process all available data using sliding window
             self.debug_print("\nProcessing all available data for test/evaluation using sliding window...")
             sequences_list = []
             labels_list = []
-            
-            # Create sequences for every point using sliding window
             for i in range(self.window_size, len(data)):
-                # Get the window of previous points
                 pressure_window = normalized_pressure[i-self.window_size:i]
                 roc_window = normalized_roc[i-self.window_size:i]
                 rolling_mean_window = rolling_mean[i-self.window_size:i]
                 rolling_std_window = rolling_std[i-self.window_size:i]
-                
-                # Create sequence with 4 features
                 sequence = np.zeros((self.window_size, 4))
                 sequence[:, 0] = pressure_window
                 sequence[:, 1] = roc_window
                 sequence[:, 2] = rolling_mean_window
                 sequence[:, 3] = rolling_std_window
-                
-                # Label: 1 if ANY point in this window is a vortex
                 label = 1 if np.any(np.logical_or(gt_detection[i-self.window_size:i] == 1, 
                                                 gt_fwhm[i-self.window_size:i] == 1)) else 0
-                
                 sequences_list.append(sequence)
                 labels_list.append(label)
-            
             sequences = np.array(sequences_list)
             labels = np.array(labels_list)
-            
             self.debug_print("\nFull data statistics:")
             self.debug_print(f"Total sequences: {len(sequences)}")
             self.debug_print(f"Vortex windows: {sum(labels)}")
             self.debug_print(f"Non-vortex windows: {len(labels) - sum(labels)}")
             self.debug_print(f"Ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
-            
             return sequences, labels, pressure_mean, pressure_std, roc_mean, roc_std, \
                    rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std
         
         # For training/validation: create balanced dataset
         sequences_list = []
         labels_list = []
-        
-        # Get vortex indices
         vortex_indices = np.where(np.logical_or(gt_detection == 1, gt_fwhm == 1))[0]
-        
         if self.debug:
             self.debug_print(f"\nFound {len(vortex_indices)} vortex events")
-        
-        # Process each vortex
         for vortex_idx in vortex_indices:
-            # Create negative sequence from window before vortex
             if vortex_idx >= self.window_size:
                 pressure_window = normalized_pressure[vortex_idx-self.window_size:vortex_idx]
                 roc_window = normalized_roc[vortex_idx-self.window_size:vortex_idx]
                 rolling_mean_window = rolling_mean[vortex_idx-self.window_size:vortex_idx]
                 rolling_std_window = rolling_std[vortex_idx-self.window_size:vortex_idx]
-                
                 sequence = np.zeros((self.window_size, 4))
                 sequence[:, 0] = pressure_window
                 sequence[:, 1] = roc_window
                 sequence[:, 2] = rolling_mean_window
                 sequence[:, 3] = rolling_std_window
-                
                 sequences_list.append(sequence)
                 labels_list.append(0)
-            
-            # Create positive sequence from vortex
             if vortex_idx + self.window_size <= len(data):
                 pressure_window = normalized_pressure[vortex_idx:vortex_idx+self.window_size]
                 roc_window = normalized_roc[vortex_idx:vortex_idx+self.window_size]
                 rolling_mean_window = rolling_mean[vortex_idx:vortex_idx+self.window_size]
                 rolling_std_window = rolling_std[vortex_idx:vortex_idx+self.window_size]
-                
                 sequence = np.zeros((self.window_size, 4))
                 sequence[:, 0] = pressure_window
                 sequence[:, 1] = roc_window
                 sequence[:, 2] = rolling_mean_window
                 sequence[:, 3] = rolling_std_window
-                
                 sequences_list.append(sequence)
                 labels_list.append(1)
-        
         sequences = np.array(sequences_list)
         labels = np.array(labels_list)
-        
         self.debug_print("\nSequence creation statistics:")
         self.debug_print(f"Total sequences: {len(sequences)}")
         self.debug_print(f"Vortex sequences: {sum(labels)}")
         self.debug_print(f"Non-vortex sequences: {len(labels) - sum(labels)}")
         self.debug_print(f"Final ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
-        
         return sequences, labels, pressure_mean, pressure_std, roc_mean, roc_std, \
                rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std
         
@@ -1015,17 +987,17 @@ def main():
     
     print("\nPreparing validation sequences...")
     X_val, y_val, _, _, _, _, _, _, _, _ = model.prepare_sequences(val_data, apply_sampling=True, 
-                                                                  pressure_mean=pressure_mean, pressure_std=pressure_std,
-                                                                  roc_mean=roc_mean, roc_std=roc_std,
-                                                                  rolling_mean_mean=rolling_mean_mean, rolling_mean_std=rolling_mean_std,
-                                                                  rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std)
+        pressure_mean=pressure_mean, pressure_std=pressure_std,
+        roc_mean=roc_mean, roc_std=roc_std,
+        rolling_mean_mean=rolling_mean_mean, rolling_mean_std=rolling_mean_std,
+        rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std)
     
     print("\nPreparing test sequences...")
     X_test, y_test, _, _, _, _, _, _, _, _ = model.prepare_sequences(test_data, apply_sampling=False,
-                                                                  pressure_mean=pressure_mean, pressure_std=pressure_std,
-                                                                  roc_mean=roc_mean, roc_std=roc_std,
-                                                                  rolling_mean_mean=rolling_mean_mean, rolling_mean_std=rolling_mean_std,
-                                                                  rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std)
+        pressure_mean=pressure_mean, pressure_std=pressure_std,
+        roc_mean=roc_mean, roc_std=roc_std,
+        rolling_mean_mean=rolling_mean_mean, rolling_mean_std=rolling_mean_std,
+        rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std)
     
     # Print class distribution
     print("\nClass distribution in sets:")
