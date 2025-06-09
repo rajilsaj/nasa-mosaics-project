@@ -1,3 +1,4 @@
+
 import os
 import pandas as pd
 import numpy as np
@@ -8,10 +9,15 @@ import joblib
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
-    confusion_matrix, classification_report,
-    roc_auc_score, precision_recall_curve,
-    precision_score, recall_score, f1_score,
-    accuracy_score, roc_curve
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+    precision_recall_curve,
+    roc_curve,
+    precision_score,
+    recall_score,
+    f1_score,
+    accuracy_score
 )
 from xgboost import XGBClassifier
 
@@ -20,7 +26,7 @@ DATA_PATH = "data/ml_ready_vortex_data.csv"
 MODEL_PATH = "results/xgboost_vortex_model.pkl"
 CONF_MATRIX_PATH = "results/confusion_matrix.png"
 THRESHOLD_PLOT_PATH = "results/threshold_tuning.png"
-ROC_CURVE_PATH = "results/roc_curve.png"
+ROC_PLOT_PATH = "results/roc_curve.png"
 os.makedirs("results", exist_ok=True)
 
 # === Preprocessing ===
@@ -29,8 +35,8 @@ def preprocess(df):
     df['pressure_diff_percent'] = (df['pressure_diff'] / df['PRESSURE_MA_500']) * 100
 
     for window in [10, 25]:
-        df[f'rolling_mean_{window}'] = df['pressure_diff'].rolling(window).mean()
-        df[f'rolling_std_{window}'] = df['pressure_diff'].rolling(window).std()
+        df[f'rolling_mean_{window}'] = df['pressure_diff'].rolling(window=window).mean()
+        df[f'rolling_std_{window}'] = df['pressure_diff'].rolling(window=window).std()
 
     for lag in [1, 2]:
         df[f'pressure_lag_{lag}'] = df['PRESSURE'].shift(lag)
@@ -50,15 +56,15 @@ def preprocess(df):
 
     df['time'] = pd.to_datetime(df['time'], format='%H:%M:%S', errors='coerce')
     df['hour_fraction'] = df['time'].dt.hour + df['time'].dt.minute / 60 + df['time'].dt.second / 3600
-    df['sin_time'] = np.sin(2 * np.pi * df['hour_fraction'] / 24)
-    df['cos_time'] = np.cos(2 * np.pi * df['hour_fraction'] / 24)
+    df['sin_time'] = np.sin(2 * np.pi * df['hour_fraction'] / 24.0)
+    df['cos_time'] = np.cos(2 * np.pi * df['hour_fraction'] / 24.0)
 
     df.ffill(inplace=True)
     df.bfill(inplace=True)
     df.dropna(inplace=True)
     return df
 
-# === Training with K-Fold CV ===
+# === Train and Evaluate with K-Fold ===
 def train_with_kfold(X, y, n_splits=5):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accs, precs, recalls, f1s, aucs = [], [], [], [], []
@@ -69,21 +75,24 @@ def train_with_kfold(X, y, n_splits=5):
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
         scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
 
         model = XGBClassifier(
             n_estimators=300,
             learning_rate=0.03,
             max_depth=6,
-            subsample=0.9,
-            colsample_bytree=0.9,
+            subsample=0.8,  # Reduced from 0.9 to prevent overfitting
+            colsample_bytree=0.8,  # Reduced for regularization
             eval_metric='logloss',
+            reg_lambda=1,  # L2 regularization
+            reg_alpha=0.5,  # L1 regularization
             random_state=42
         )
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        y_proba = model.predict_proba(X_test)[:, 1]
+        model.fit(X_train_scaled, y_train)
+
+        y_pred = model.predict(X_test_scaled)
+        y_proba = model.predict_proba(X_test_scaled)[:, 1]
 
         accs.append(accuracy_score(y_test, y_pred))
         precs.append(precision_score(y_test, y_pred))
@@ -98,9 +107,9 @@ def train_with_kfold(X, y, n_splits=5):
             cm = confusion_matrix(y_test, y_pred)
             plt.figure(figsize=(6, 4))
             sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-            plt.title("Confusion Matrix")
-            plt.xlabel("Predicted")
-            plt.ylabel("True")
+            plt.title('Confusion Matrix')
+            plt.xlabel('Predicted')
+            plt.ylabel('True')
             plt.tight_layout()
             plt.savefig(CONF_MATRIX_PATH)
             plt.close()
@@ -111,13 +120,13 @@ def train_with_kfold(X, y, n_splits=5):
             best_threshold = thresholds[np.argmax(f1_scores)]
 
             plt.figure(figsize=(10, 6))
-            plt.plot(thresholds, f1_scores[:-1], label='F1 Score')
-            plt.plot(thresholds, precision[:-1], linestyle='--', label='Precision')
-            plt.plot(thresholds, recall[:-1], linestyle='--', label='Recall')
+            plt.plot(thresholds, f1_scores[:-1], label='F1 Score', marker='o')
+            plt.plot(thresholds, precision[:-1], label='Precision', linestyle='--')
+            plt.plot(thresholds, recall[:-1], label='Recall', linestyle='--')
             plt.axvline(x=best_threshold, color='red', linestyle='--', label=f'Best Threshold: {best_threshold:.4f}')
-            plt.xlabel("Threshold")
-            plt.ylabel("Score")
-            plt.title("Threshold Tuning")
+            plt.xlabel('Threshold')
+            plt.ylabel('Score')
+            plt.title('Threshold Tuning')
             plt.legend()
             plt.grid(True)
             plt.tight_layout()
@@ -125,20 +134,20 @@ def train_with_kfold(X, y, n_splits=5):
             plt.close()
             print(f"📈 Threshold tuning plot saved to: {THRESHOLD_PLOT_PATH}")
 
-            # ROC Curve
+            # === ROC Curve Generation ===
             fpr, tpr, _ = roc_curve(y_test, y_proba)
-            plt.figure(figsize=(6, 6))
-            plt.plot(fpr, tpr, label=f"AUC = {roc_auc_score(y_test, y_proba):.4f}")
+            plt.figure(figsize=(6, 4))
+            plt.plot(fpr, tpr, label=f'ROC Curve (AUC = {roc_auc_score(y_test, y_proba):.2f})')
             plt.plot([0, 1], [0, 1], 'k--')
-            plt.xlabel("False Positive Rate")
-            plt.ylabel("True Positive Rate")
-            plt.title("ROC Curve")
-            plt.legend()
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('ROC Curve')
+            plt.legend(loc='lower right')
             plt.grid(True)
             plt.tight_layout()
-            plt.savefig(ROC_CURVE_PATH)
+            plt.savefig(ROC_PLOT_PATH)
             plt.close()
-            print(f"📈 ROC curve saved to: {ROC_CURVE_PATH}")
+            print(f"📉 ROC Curve saved to: {ROC_PLOT_PATH}")
 
     print("\n🔁 Cross-Validation Results (Average of All Folds):")
     print(f" - Accuracy:  {np.mean(accs):.4f}")
@@ -147,7 +156,7 @@ def train_with_kfold(X, y, n_splits=5):
     print(f" - F1 Score:  {np.mean(f1s):.4f}")
     print(f" - ROC-AUC:   {np.mean(aucs):.4f}")
 
-# === Main ===
+# === MAIN ===
 def main():
     print("🚀 Loading data...")
     df = pd.read_csv(DATA_PATH)
@@ -163,7 +172,7 @@ def main():
     y = df['gt_4xfwhm']
 
     if y.nunique() < 2:
-        print("❌ ERROR: Only one class in target.")
+        print("❌ ERROR: Only one class in target. Abort.")
         return
 
     train_with_kfold(X, y)
