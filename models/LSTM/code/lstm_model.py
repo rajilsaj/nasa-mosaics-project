@@ -84,11 +84,32 @@ class VortexLSTMModel:
         
         return normalized_mean, normalized_std, rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std
 
+    def calculate_rolling_min_max(self, pressure_values: np.ndarray, window_size: int = 20,
+                                 rolling_min_mean: float = None, rolling_min_std: float = None,
+                                 rolling_max_mean: float = None, rolling_max_std: float = None) -> tuple:
+        """Calculate rolling min and max for pressure values."""
+        rolling_min = pd.Series(pressure_values).rolling(window=window_size, min_periods=1).min()
+        rolling_max = pd.Series(pressure_values).rolling(window=window_size, min_periods=1).max()
+        rolling_min = rolling_min.bfill().ffill()
+        rolling_max = rolling_max.bfill().ffill()
+        if rolling_min_mean is None:
+            rolling_min_mean = np.mean(rolling_min)
+            rolling_min_std = np.std(rolling_min)
+            rolling_max_mean = np.mean(rolling_max)
+            rolling_max_std = np.std(rolling_max)
+            rolling_min_std = max(rolling_min_std, 1e-10)
+            rolling_max_std = max(rolling_max_std, 1e-10)
+        normalized_min = (rolling_min - rolling_min_mean) / rolling_min_std
+        normalized_max = (rolling_max - rolling_max_mean) / rolling_max_std
+        return normalized_min, normalized_max, rolling_min_mean, rolling_min_std, rolling_max_mean, rolling_max_std
+
     def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, 
                          pressure_mean: float = None, pressure_std: float = None,
                          roc_mean: float = None, roc_std: float = None,
                          rolling_mean_mean: float = None, rolling_mean_std: float = None,
-                         rolling_std_mean: float = None, rolling_std_std: float = None) -> tuple:
+                         rolling_std_mean: float = None, rolling_std_std: float = None,
+                         rolling_min_mean: float = None, rolling_min_std: float = None,
+                         rolling_max_mean: float = None, rolling_max_std: float = None) -> tuple:
         """Prepare sequences for vortex prediction.
         
         Args:
@@ -103,6 +124,10 @@ class VortexLSTMModel:
             rolling_mean_std: Std of rolling mean from training data
             rolling_std_mean: Mean of rolling std from training data
             rolling_std_std: Std of rolling std from training data
+            rolling_min_mean: Mean of rolling min from training data
+            rolling_min_std: Std of rolling min from training data
+            rolling_max_mean: Mean of rolling max from training data
+            rolling_max_std: Std of rolling max from training data
         """
         pressure_values = data['PRESSURE'].values
         gt_detection = data['gt_detection_win'].values
@@ -136,6 +161,16 @@ class VortexLSTMModel:
                 rolling_std_std=rolling_std_std
             )
         
+        # Calculate rolling min/max features
+        rolling_min, rolling_max, rolling_min_mean, rolling_min_std, rolling_max_mean, rolling_max_std = \
+            self.calculate_rolling_min_max(
+                pressure_values,
+                rolling_min_mean=rolling_min_mean,
+                rolling_min_std=rolling_min_std,
+                rolling_max_mean=rolling_max_mean,
+                rolling_max_std=rolling_max_std
+            )
+        
         if not apply_sampling:
             self.debug_print("\nProcessing all available data for test/evaluation using sliding window...")
             sequences_list = []
@@ -145,11 +180,15 @@ class VortexLSTMModel:
                 roc_window = normalized_roc[i-self.window_size:i]
                 rolling_mean_window = rolling_mean[i-self.window_size:i]
                 rolling_std_window = rolling_std[i-self.window_size:i]
-                sequence = np.zeros((self.window_size, 4))
+                rolling_min_window = rolling_min[i-self.window_size:i]
+                rolling_max_window = rolling_max[i-self.window_size:i]
+                sequence = np.zeros((self.window_size, 6))
                 sequence[:, 0] = pressure_window
                 sequence[:, 1] = roc_window
                 sequence[:, 2] = rolling_mean_window
                 sequence[:, 3] = rolling_std_window
+                sequence[:, 4] = rolling_min_window
+                sequence[:, 5] = rolling_max_window
                 label = 1 if np.any(np.logical_or(gt_detection[i-self.window_size:i] == 1, 
                                                 gt_fwhm[i-self.window_size:i] == 1)) else 0
                 sequences_list.append(sequence)
@@ -162,7 +201,8 @@ class VortexLSTMModel:
             self.debug_print(f"Non-vortex windows: {len(labels) - sum(labels)}")
             self.debug_print(f"Ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
             return sequences, labels, pressure_mean, pressure_std, roc_mean, roc_std, \
-                   rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std
+                   rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std, \
+                   rolling_min_mean, rolling_min_std, rolling_max_mean, rolling_max_std
         
         # For training/validation: create balanced dataset
         sequences_list = []
@@ -176,11 +216,15 @@ class VortexLSTMModel:
                 roc_window = normalized_roc[vortex_idx-self.window_size:vortex_idx]
                 rolling_mean_window = rolling_mean[vortex_idx-self.window_size:vortex_idx]
                 rolling_std_window = rolling_std[vortex_idx-self.window_size:vortex_idx]
-                sequence = np.zeros((self.window_size, 4))
+                rolling_min_window = rolling_min[vortex_idx-self.window_size:vortex_idx]
+                rolling_max_window = rolling_max[vortex_idx-self.window_size:vortex_idx]
+                sequence = np.zeros((self.window_size, 6))
                 sequence[:, 0] = pressure_window
                 sequence[:, 1] = roc_window
                 sequence[:, 2] = rolling_mean_window
                 sequence[:, 3] = rolling_std_window
+                sequence[:, 4] = rolling_min_window
+                sequence[:, 5] = rolling_max_window
                 sequences_list.append(sequence)
                 labels_list.append(0)
             if vortex_idx + self.window_size <= len(data):
@@ -188,11 +232,15 @@ class VortexLSTMModel:
                 roc_window = normalized_roc[vortex_idx:vortex_idx+self.window_size]
                 rolling_mean_window = rolling_mean[vortex_idx:vortex_idx+self.window_size]
                 rolling_std_window = rolling_std[vortex_idx:vortex_idx+self.window_size]
-                sequence = np.zeros((self.window_size, 4))
+                rolling_min_window = rolling_min[vortex_idx:vortex_idx+self.window_size]
+                rolling_max_window = rolling_max[vortex_idx:vortex_idx+self.window_size]
+                sequence = np.zeros((self.window_size, 6))
                 sequence[:, 0] = pressure_window
                 sequence[:, 1] = roc_window
                 sequence[:, 2] = rolling_mean_window
                 sequence[:, 3] = rolling_std_window
+                sequence[:, 4] = rolling_min_window
+                sequence[:, 5] = rolling_max_window
                 sequences_list.append(sequence)
                 labels_list.append(1)
         sequences = np.array(sequences_list)
@@ -203,7 +251,8 @@ class VortexLSTMModel:
         self.debug_print(f"Non-vortex sequences: {len(labels) - sum(labels)}")
         self.debug_print(f"Final ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
         return sequences, labels, pressure_mean, pressure_std, roc_mean, roc_std, \
-               rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std
+               rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std, \
+               rolling_min_mean, rolling_min_std, rolling_max_mean, rolling_max_std
         
     def temporal_focal_loss(self, gamma=1.5, alpha=None, temporal_weight=0.1):
         """Focal loss with temporal awareness.
@@ -323,7 +372,7 @@ class VortexLSTMModel:
         
         # Train model
         self.debug_print("\nTraining vortex prediction model...")
-        self.model = self.build_model((self.window_size, 4), alpha=alpha, gamma=1.5)
+        self.model = self.build_model((self.window_size, 6), alpha=alpha, gamma=1.5)
         
         # Add learning rate scheduler with adjusted patience
         reduce_lr = ReduceLROnPlateau(
@@ -373,7 +422,7 @@ class VortexLSTMModel:
             raise ValueError(f"Need at least {self.window_size} pressure readings")
             
         current_readings = pressure_readings[-self.window_size:]
-        sequence = current_readings.reshape(1, self.window_size, 4)
+        sequence = current_readings.reshape(1, self.window_size, 6)
         return self.model.predict(sequence)[0][0]
     
     def evaluate(self, X_test, y_test):
@@ -801,7 +850,8 @@ def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame) -> dict
     """Evaluate model performance on the full dataset."""
     debug_print(model.debug, "\nPreparing sequences from full dataset (no sampling)...")
     X_full, y_full, pressure_mean, pressure_std, roc_mean, roc_std, \
-    rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std = model.prepare_sequences(data, apply_sampling=False)
+    rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std, \
+    rolling_min_mean, rolling_min_std, rolling_max_mean, rolling_max_std = model.prepare_sequences(data, apply_sampling=False)
     
     debug_print(model.debug, "Making predictions on full dataset...")
     y_pred_proba = model.predict(X_full)
@@ -983,21 +1033,26 @@ def main():
     # Prepare sequences for each split
     print("\nPreparing training sequences...")
     X_train, y_train, pressure_mean, pressure_std, roc_mean, roc_std, \
-    rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std = model.prepare_sequences(train_data, apply_sampling=True)
+    rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std, \
+    rolling_min_mean, rolling_min_std, rolling_max_mean, rolling_max_std = model.prepare_sequences(train_data, apply_sampling=True)
     
     print("\nPreparing validation sequences...")
-    X_val, y_val, _, _, _, _, _, _, _, _ = model.prepare_sequences(val_data, apply_sampling=True, 
+    X_val, y_val, _, _, _, _, _, _, _, _, _, _, _, _ = model.prepare_sequences(val_data, apply_sampling=True, 
         pressure_mean=pressure_mean, pressure_std=pressure_std,
         roc_mean=roc_mean, roc_std=roc_std,
         rolling_mean_mean=rolling_mean_mean, rolling_mean_std=rolling_mean_std,
-        rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std)
+        rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std,
+        rolling_min_mean=rolling_min_mean, rolling_min_std=rolling_min_std,
+        rolling_max_mean=rolling_max_mean, rolling_max_std=rolling_max_std)
     
     print("\nPreparing test sequences...")
-    X_test, y_test, _, _, _, _, _, _, _, _ = model.prepare_sequences(test_data, apply_sampling=False,
+    X_test, y_test, _, _, _, _, _, _, _, _, _, _, _, _ = model.prepare_sequences(test_data, apply_sampling=False,
         pressure_mean=pressure_mean, pressure_std=pressure_std,
         roc_mean=roc_mean, roc_std=roc_std,
         rolling_mean_mean=rolling_mean_mean, rolling_mean_std=rolling_mean_std,
-        rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std)
+        rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std,
+        rolling_min_mean=rolling_min_mean, rolling_min_std=rolling_min_std,
+        rolling_max_mean=rolling_max_mean, rolling_max_std=rolling_max_std)
     
     # Print class distribution
     print("\nClass distribution in sets:")
