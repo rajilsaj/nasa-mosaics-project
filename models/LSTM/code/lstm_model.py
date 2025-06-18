@@ -1011,9 +1011,11 @@ def main():
     # Train or load model
     if model_path.exists() and not args.retrain:
         print("\nLoading existing model...")
+        # Fix: Register the custom loss function as 'loss_function' for Keras
+        loss_fn = model.temporal_focal_loss()
         model.model = tf.keras.models.load_model(
             model_path,
-            custom_objects={'temporal_focal_loss': model.temporal_focal_loss()}
+            custom_objects={'loss_function': loss_fn}
         )
         print("Model loaded successfully")
     else:
@@ -1042,6 +1044,12 @@ def main():
     print(f"F1-Score: {test_results['f1']:.4f}")
     print(f"ROC-AUC: {test_results['roc_auc']:.4f}")
     print(f"PR-AUC: {test_results['pr_auc']:.4f}")
+
+    # --- NEW: Generate confidence plots for test set ---
+    gt_windows = find_detection_windows(test_data, debug=False)
+    plot_confidence_distribution(y_test, test_results['y_pred_proba'], save_path='confidence_distribution.png')
+    plot_confidence_timeline(test_data, test_results['y_pred_proba'], gt_windows, save_path='confidence_timeline.png')
+    # --- END NEW ---
     
     # Analyze learned patterns
     print("\nAnalyzing learned patterns...")
