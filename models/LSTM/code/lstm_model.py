@@ -1045,10 +1045,14 @@ def main():
     print(f"ROC-AUC: {test_results['roc_auc']:.4f}")
     print(f"PR-AUC: {test_results['pr_auc']:.4f}")
 
-    # --- NEW: Generate confidence plots for test set ---
-    gt_windows = find_detection_windows(test_data, debug=False)
-    plot_confidence_distribution(y_test, test_results['y_pred_proba'], save_path='confidence_distribution.png')
-    plot_confidence_timeline(test_data, test_results['y_pred_proba'], gt_windows, save_path='confidence_timeline.png')
+    # --- NEW: Compare PR-AUC to random baseline ---
+    vortex_prevalence = sum(y_test) / len(y_test)
+    pr_auc_model = test_results['pr_auc']
+    print(f"Random PR-AUC (vortex prevalence): {vortex_prevalence:.5f}")
+    if vortex_prevalence > 0:
+        print(f"Model is {pr_auc_model / vortex_prevalence:.1f}x better than random!")
+    else:
+        print("No vortex events in test set; cannot compute random baseline.")
     # --- END NEW ---
     
     # Analyze learned patterns
