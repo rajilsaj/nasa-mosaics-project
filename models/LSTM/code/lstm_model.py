@@ -437,34 +437,72 @@ class VortexLSTMModel:
         return events
 
     def evaluate_event_level(self, y_pred, window_starts, window_size, events):
-        """Evaluate predictions at the event level."""
-        matched_events = set()
-        used_preds = set()
+        """Evaluate predictions at the event level (grouping contiguous positives)."""
+        def get_event_ranges(binary_array, starts, window_size):
+            # Returns list of (start, end) indices for contiguous True regions
+            events = []
+            in_event = False
+            for i, val in enumerate(binary_array):
+                if val and not in_event:
+                    start = starts[i]
+                    in_event = True
+                elif not val and in_event:
+                    end = starts[i-1] + window_size - 1
+                    events.append((start, end))
+                    in_event = False
+            if in_event:
+                end = starts[len(binary_array)-1] + window_size - 1
+                events.append((start, end))
+            return events
+
+        # Group predicted positives into events
+        pred_events = get_event_ranges(y_pred, window_starts, window_size)
+        # True events are already provided as 'events'
+
+        matched_true = set()
+        matched_pred = set()
         tp = 0
         fp = 0
+        fn = 0
         earliness = []
 
-        for i, pred in enumerate(y_pred):
-            if pred == 1:
-                win_range = set(range(window_starts[i], window_starts[i] + window_size))
-                matched = False
-                for j, (start, end) in enumerate(events):
-                    if j in matched_events:
-                        continue  # already counted
-                    event_range = set(range(start, end + 1))
-                    if win_range & event_range:
-                        tp += 1
-                        matched_events.add(j)
-                        matched = True
-                        # Calculate earliness
-                        pred_times = [window_starts[i] for i, p in enumerate(y_pred) if p == 1 and window_starts[i] >= start]
-                        if pred_times:
-                            earliness.append(pred_times[0] - start)
-                        break
-                if not matched:
-                    fp += 1
+        # --- DEBUG PRINTS ---
+        print("\n[DEBUG] Predicted event ranges:")
+        for i, (p_start, p_end) in enumerate(pred_events):
+            print(f"  Predicted event {i}: {p_start} to {p_end}")
+        print(f"[DEBUG] Number of predicted events: {len(pred_events)}")
+        print("[DEBUG] True event ranges:")
+        for j, (t_start, t_end) in enumerate(events):
+            print(f"  True event {j}: {t_start} to {t_end}")
+        print(f"[DEBUG] Number of true events: {len(events)}")
+        # --- END DEBUG PRINTS ---
 
-        fn = len(events) - len(matched_events)
+        # For each predicted event, check for overlap with any true event
+        for i, (p_start, p_end) in enumerate(pred_events):
+            overlap = False
+            for j, (t_start, t_end) in enumerate(events):
+                if j in matched_true:
+                    continue
+                # Check for overlap
+                if p_end >= t_start and p_start <= t_end:
+                    tp += 1
+                    matched_true.add(j)
+                    matched_pred.add(i)
+                    # Earliness: how early did we detect the event?
+                    earliness.append(max(0, p_start - t_start))
+                    overlap = True
+                    print(f"[DEBUG] Predicted event {i} overlaps with true event {j}")
+                    break
+            if not overlap:
+                fp += 1
+                print(f"[DEBUG] Predicted event {i} does NOT overlap with any true event")
+
+        # Any true event not matched is a false negative
+        fn = len(events) - len(matched_true)
+        print(f"[DEBUG] Number of TPs (overlaps): {tp}")
+        print(f"[DEBUG] Number of FPs: {fp}")
+        print(f"[DEBUG] Number of FNs: {fn}")
+
         return tp, fp, fn, earliness
 
     def evaluate_with_windows(self, test_results, gt_windows, test_data):
@@ -695,6 +733,177 @@ class VortexLSTMModel:
         print(f"Mean ROC in true patterns: {np.mean(mean_true_roc):.2f} ± {np.mean(std_true_roc):.2f}")
         print(f"Max ROC difference between patterns: {np.max(np.abs(mean_pred_roc - mean_true_roc)):.2f}")
         print(f"Average ROC difference between patterns: {np.mean(np.abs(mean_pred_roc - mean_true_roc)):.2f}")
+
+    def evaluate_triggered_event_detection(self, y_pred, test_data):
+        """Evaluate using triggered event detection logic with window alignment."""
+        gt_detection = test_data['gt_detection_win'].values
+        gt_fwhm = test_data['gt_fwhm'].values
+        gt_combined = np.logical_or(gt_detection == 1, gt_fwhm == 1)
+        n_samples = len(gt_combined)
+        window_size = self.window_size
+
+        # Find all true event windows
+        true_events = []
+        in_event = False
+        for i in range(n_samples):
+            if gt_combined[i] and not in_event:
+                start = i
+                in_event = True
+            elif not gt_combined[i] and in_event:
+                end = i - 1
+                true_events.append((start, end))
+                in_event = False
+        if in_event:
+            true_events.append((start, n_samples - 1))
+
+        # Group predicted positives into events (contiguous runs)
+        pred_events = []
+        in_pred = False
+        for i, val in enumerate(y_pred):
+            if val == 1 and not in_pred:
+                start = i
+                in_pred = True
+            elif val == 0 and in_pred:
+                end = i - 1
+                pred_events.append((start, end))
+                in_pred = False
+        if in_pred:
+            pred_events.append((start, len(y_pred) - 1))
+
+        # For each predicted event, expand start index by -window_size (min 0)
+        pred_events_aligned = [(max(0, start - window_size), end) for (start, end) in pred_events]
+
+        detected_true_events = set()
+        detected_pred_events = set()
+        for p_idx, (p_start, p_end) in enumerate(pred_events_aligned):
+            for t_idx, (t_start, t_end) in enumerate(true_events):
+                # Check for overlap
+                if p_end >= t_start and p_start <= t_end:
+                    detected_true_events.add(t_idx)
+                    detected_pred_events.add(p_idx)
+
+        tp = len(detected_true_events)
+        fp = len(pred_events_aligned) - len(detected_pred_events)
+        fn = len(true_events) - tp
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+        print("\nTriggered Event Detection Evaluation (Window-Aligned):")
+        print(f"Triggered Event-based Precision: {precision:.4f}")
+        print(f"Triggered Event-based Recall: {recall:.4f}")
+        print(f"Triggered Event-based F1-Score: {f1:.4f}")
+        print(f"Triggered Event-based True Positives: {tp}")
+        print(f"Triggered Event-based False Positives: {fp}")
+        print(f"Triggered Event-based False Negatives: {fn}")
+        print(f"Total True Events: {len(true_events)}")
+        return {
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'tp': tp,
+            'fp': fp,
+            'fn': fn,
+            'n_true_events': len(true_events)
+        }
+
+    def evaluate_triggered_pointwise(self, y_pred, test_data):
+        """Evaluate using hybrid triggered pointwise logic."""
+        gt_detection = test_data['gt_detection_win'].values
+        gt_fwhm = test_data['gt_fwhm'].values
+        gt_combined = np.logical_or(gt_detection == 1, gt_fwhm == 1)
+        n_samples = len(gt_combined)
+        window_size = self.window_size
+
+        # Find all true event windows
+        true_events = []
+        in_event = False
+        for i in range(n_samples):
+            if gt_combined[i] and not in_event:
+                start = i
+                in_event = True
+            elif not gt_combined[i] and in_event:
+                end = i - 1
+                true_events.append((start, end))
+                in_event = False
+        if in_event:
+            true_events.append((start, n_samples - 1))
+
+        # For each predicted event, expand start index by -window_size (min 0)
+        pred_events = []
+        in_pred = False
+        for i, val in enumerate(y_pred):
+            if val == 1 and not in_pred:
+                start = i
+                in_pred = True
+            elif val == 0 and in_pred:
+                end = i - 1
+                pred_events.append((start, end))
+                in_pred = False
+        if in_pred:
+            pred_events.append((start, len(y_pred) - 1))
+        
+        pred_events_aligned = [(max(0, start - window_size), end) for (start, end) in pred_events]
+
+        # Track which true events have been triggered
+        triggered_events = set()
+        for p_start, p_end in pred_events_aligned:
+            for t_idx, (t_start, t_end) in enumerate(true_events):
+                if p_end >= t_start and p_start <= t_end:
+                    triggered_events.add(t_idx)
+
+        # Now evaluate pointwise with triggered logic
+        tp = 0  # True positives
+        fp = 0  # False positives
+        tn = 0  # True negatives
+        fn = 0  # False negatives
+
+        for i in range(len(y_pred)):
+            # Check if this prediction index is within any triggered event
+            in_triggered_event = False
+            for t_idx in triggered_events:
+                t_start, t_end = true_events[t_idx]
+                # Adjust for window alignment
+                pred_idx = i + window_size
+                if t_start <= pred_idx <= t_end:
+                    in_triggered_event = True
+                    break
+
+            if y_pred[i] == 1:  # Model predicted positive
+                if in_triggered_event:
+                    tp += 1  # True positive (either correct or within triggered event)
+                else:
+                    fp += 1  # False positive (outside any true event)
+            else:  # Model predicted negative
+                if in_triggered_event:
+                    tp += 1  # Still true positive (within triggered event)
+                else:
+                    tn += 1  # True negative (correctly predicted negative outside events)
+
+        # Calculate metrics
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+        print("\nTriggered Pointwise Evaluation:")
+        print(f"Triggered Pointwise Precision: {precision:.4f}")
+        print(f"Triggered Pointwise Recall: {recall:.4f}")
+        print(f"Triggered Pointwise F1-Score: {f1:.4f}")
+        print(f"Triggered Pointwise True Positives: {tp}")
+        print(f"Triggered Pointwise False Positives: {fp}")
+        print(f"Triggered Pointwise True Negatives: {tn}")
+        print(f"Triggered Pointwise False Negatives: {fn}")
+        print(f"Number of triggered events: {len(triggered_events)}")
+        return {
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'tp': tp,
+            'fp': fp,
+            'tn': tn,
+            'fn': fn,
+            'n_triggered_events': len(triggered_events)
+        }
 
 def find_detection_windows(data: pd.DataFrame, debug: bool = False) -> list:
     """Find all detection windows (where gt_detection_win == 1 or gt_fwhm == 1)."""
@@ -1122,8 +1331,24 @@ def main():
         
         plt.tight_layout()
         plt.show()
-    
-    print("\nModel training and analysis complete!")
+
+    # After test_results = model.evaluate(X_test, y_test)
+    gt_windows = find_detection_windows(test_data, debug=False)
+    event_results = model.evaluate_with_windows(test_results, gt_windows, test_data)
+    print("\nEvent-Based Evaluation:")
+    print(f"Event-based Precision: {event_results['event_metrics']['precision']:.4f}")
+    print(f"Event-based Recall: {event_results['event_metrics']['recall']:.4f}")
+    print(f"Event-based F1-Score: {event_results['event_metrics']['f1']:.4f}")
+    print(f"Event-based True Positives: {event_results['event_metrics']['tp']}")
+    print(f"Event-based False Positives: {event_results['event_metrics']['fp']}")
+    print(f"Event-based False Negatives: {event_results['event_metrics']['fn']}")
+    if event_results['event_metrics']['earliness']:
+        print(f"Event-based Mean Earliness: {np.mean(event_results['event_metrics']['earliness']):.2f} samples")
+        
+        print("\nModel training and analysis complete!")
+
+    # After triggered event evaluation in main()
+    triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
 
 if __name__ == "__main__":
     main() 
