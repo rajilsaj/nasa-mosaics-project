@@ -44,166 +44,103 @@ class VortexLSTMModel:
         """Print debug information if debug flag is set."""
         debug_print(self.debug, *args, **kwargs)
         
-    def calculate_rolling_features(self, pressure_values: np.ndarray, 
-                                 window_size: int = 20,
-                                 rolling_mean_mean: float = None,
-                                 rolling_mean_std: float = None,
-                                 rolling_std_mean: float = None,
-                                 rolling_std_std: float = None) -> tuple:
-        """Calculate rolling mean and standard deviation for pressure values."""
-        # Calculate rolling statistics with proper handling of edge cases
-        rolling_mean = pd.Series(pressure_values).rolling(window=window_size, min_periods=1).mean()
-        rolling_std = pd.Series(pressure_values).rolling(window=window_size, min_periods=1).std()
-        
-        # Fill any remaining NaN values with appropriate values
-        rolling_mean = rolling_mean.fillna(method='bfill').fillna(method='ffill')
-        rolling_std = rolling_std.fillna(method='bfill').fillna(method='ffill')
-        
-        if rolling_mean_mean is None:  # Training mode
-            # Calculate statistics from training data
-            rolling_mean_mean = np.mean(rolling_mean)
-            rolling_mean_std = np.std(rolling_mean)
-            rolling_std_mean = np.mean(rolling_std)
-            rolling_std_std = np.std(rolling_std)
-            
-            # Ensure we don't divide by zero
-            rolling_mean_std = max(rolling_mean_std, 1e-10)
-            rolling_std_std = max(rolling_std_std, 1e-10)
-            
-            self.debug_print("\nCalculated rolling statistics from training data:")
-            self.debug_print(f"Rolling Mean - Mean: {rolling_mean_mean:.2f}, Std: {rolling_mean_std:.2f}")
-            self.debug_print(f"Rolling Std - Mean: {rolling_std_mean:.2f}, Std: {rolling_std_std:.2f}")
-        
-        # Normalize using either calculated or provided statistics
-        normalized_mean = (rolling_mean - rolling_mean_mean) / rolling_mean_std
-        normalized_std = (rolling_std - rolling_std_mean) / rolling_std_std
-        
-        # Ensure no NaN values in final output
-        normalized_mean = normalized_mean.fillna(0)
-        normalized_std = normalized_std.fillna(0)
-        
-        return normalized_mean, normalized_std, rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std
-
-    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, 
-                         pressure_mean: float = None, pressure_std: float = None,
-                         roc_mean: float = None, roc_std: float = None,
-                         rolling_mean_mean: float = None, rolling_mean_std: float = None,
-                         rolling_std_mean: float = None, rolling_std_std: float = None) -> tuple:
-        """Prepare sequences for vortex prediction.
+    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True) -> tuple:
+        """
+        Prepare sequences for vortex prediction using local detrending.
+        Each window is normalized independently to make features invariant
+        to the absolute pressure baseline, forcing the model to learn the
+        shape of the pressure curve.
         
         Args:
             data: Input data
-            apply_sampling: If True, creates balanced dataset for training/validation.
-                          If False, processes all available data for testing/evaluation.
-            pressure_mean: Mean of pressure values from training data
-            pressure_std: Standard deviation of pressure values from training data
-            roc_mean: Mean of rate of change from training data
-            roc_std: Standard deviation of rate of change from training data
-            rolling_mean_mean: Mean of rolling mean from training data
-            rolling_mean_std: Std of rolling mean from training data
-            rolling_std_mean: Mean of rolling std from training data
-            rolling_std_std: Std of rolling std from training data
+            apply_sampling: If True, creates balanced dataset from vortex events.
+                          If False, processes all available data using a sliding window.
         """
         pressure_values = data['PRESSURE'].values
         gt_detection = data['gt_detection_win'].values
         gt_fwhm = data['gt_fwhm'].values
         
-        # Calculate rate of change (pressure differences)
-        rate_of_change = np.diff(pressure_values)
-        rate_of_change = np.concatenate([[0], rate_of_change])
-        
-        # Only calculate normalization statistics if not provided (training data)
-        if pressure_mean is None or pressure_std is None:
-            pressure_mean = np.mean(pressure_values)
-            pressure_std = np.std(pressure_values)
-            roc_mean = np.mean(rate_of_change)
-            roc_std = np.std(rate_of_change)
-            self.debug_print("\nCalculated normalization statistics from training data:")
-            self.debug_print(f"Pressure - Mean: {pressure_mean:.2f}, Std: {pressure_std:.2f}")
-            self.debug_print(f"Rate of Change - Mean: {roc_mean:.2f}, Std: {roc_std:.2f}")
-        
-        # Normalize using provided or calculated statistics
-        normalized_pressure = (pressure_values - pressure_mean) / pressure_std
-        normalized_roc = (rate_of_change - roc_mean) / roc_std
-        
-        # Calculate rolling features
-        rolling_mean, rolling_std, rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std = \
-            self.calculate_rolling_features(
-                pressure_values,
-                rolling_mean_mean=rolling_mean_mean,
-                rolling_mean_std=rolling_mean_std,
-                rolling_std_mean=rolling_std_mean,
-                rolling_std_std=rolling_std_std
-            )
-        
-        if not apply_sampling:
-            self.debug_print("\nProcessing all available data for test/evaluation using sliding window...")
-            sequences_list = []
-            labels_list = []
-            for i in range(self.window_size, len(data)):
-                pressure_window = normalized_pressure[i-self.window_size:i]
-                roc_window = normalized_roc[i-self.window_size:i]
-                rolling_mean_window = rolling_mean[i-self.window_size:i]
-                rolling_std_window = rolling_std[i-self.window_size:i]
-                sequence = np.zeros((self.window_size, 4))
-                sequence[:, 0] = pressure_window
-                sequence[:, 1] = roc_window
-                sequence[:, 2] = rolling_mean_window
-                sequence[:, 3] = rolling_std_window
-                label = 1 if np.any(np.logical_or(gt_detection[i-self.window_size:i] == 1, 
-                                                gt_fwhm[i-self.window_size:i] == 1)) else 0
-                sequences_list.append(sequence)
-                labels_list.append(label)
-            sequences = np.array(sequences_list)
-            labels = np.array(labels_list)
-            self.debug_print("\nFull data statistics:")
-            self.debug_print(f"Total sequences: {len(sequences)}")
-            self.debug_print(f"Vortex windows: {sum(labels)}")
-            self.debug_print(f"Non-vortex windows: {len(labels) - sum(labels)}")
-            self.debug_print(f"Ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
-            return sequences, labels, pressure_mean, pressure_std, roc_mean, roc_std, \
-                   rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std
-        
-        # For training/validation: create balanced dataset
         sequences_list = []
         labels_list = []
-        vortex_indices = np.where(np.logical_or(gt_detection == 1, gt_fwhm == 1))[0]
-        if self.debug:
-            self.debug_print(f"\nFound {len(vortex_indices)} vortex events")
-        for vortex_idx in vortex_indices:
-            if vortex_idx >= self.window_size:
-                pressure_window = normalized_pressure[vortex_idx-self.window_size:vortex_idx]
-                roc_window = normalized_roc[vortex_idx-self.window_size:vortex_idx]
-                rolling_mean_window = rolling_mean[vortex_idx-self.window_size:vortex_idx]
-                rolling_std_window = rolling_std[vortex_idx-self.window_size:vortex_idx]
-                sequence = np.zeros((self.window_size, 4))
-                sequence[:, 0] = pressure_window
-                sequence[:, 1] = roc_window
-                sequence[:, 2] = rolling_mean_window
-                sequence[:, 3] = rolling_std_window
+
+        if not apply_sampling:
+            # --- Process all data with a sliding window for testing/evaluation ---
+            self.debug_print("\nProcessing all available data for test/evaluation using sliding window with local detrending...")
+            for i in range(self.window_size, len(data)):
+                # 1. Get the raw pressure window
+                pressure_window = pressure_values[i-self.window_size:i].copy()
+                
+                # 2. Detrend by subtracting the window's own mean
+                local_mean = np.mean(pressure_window)
+                detrended_pressure = pressure_window - local_mean
+                
+                # 3. Calculate features on the detrended data
+                rolling_mean = pd.Series(detrended_pressure).rolling(window=20, min_periods=1).mean().values
+                rolling_std = pd.Series(detrended_pressure).rolling(window=20, min_periods=1).std().fillna(0).values
+                
+                # 4. Calculate detrended acceleration (second derivative)
+                acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
+                
+                # 5. Assemble the feature sequence (ONLY shape and curvature)
+                sequence = np.stack([detrended_pressure, acceleration], axis=1)
+                
+                # 6. Determine the label for the window
+                label = 1 if np.any(gt_detection[i-self.window_size:i] == 1) else 0
                 sequences_list.append(sequence)
-                labels_list.append(0)
-            if vortex_idx + self.window_size <= len(data):
-                pressure_window = normalized_pressure[vortex_idx:vortex_idx+self.window_size]
-                roc_window = normalized_roc[vortex_idx:vortex_idx+self.window_size]
-                rolling_mean_window = rolling_mean[vortex_idx:vortex_idx+self.window_size]
-                rolling_std_window = rolling_std[vortex_idx:vortex_idx+self.window_size]
-                sequence = np.zeros((self.window_size, 4))
-                sequence[:, 0] = pressure_window
-                sequence[:, 1] = roc_window
-                sequence[:, 2] = rolling_mean_window
-                sequence[:, 3] = rolling_std_window
-                sequences_list.append(sequence)
-                labels_list.append(1)
+                labels_list.append(label)
+
+            self.debug_print("\nFull data statistics (after local detrending):")
+            self.debug_print(f"Total sequences: {len(sequences_list)}")
+            self.debug_print(f"Vortex windows: {sum(labels_list)}")
+
+        else:
+            # --- Create a balanced dataset for training/validation ---
+            self.debug_print("\nCreating balanced dataset for training/validation with local detrending...")
+            vortex_indices = np.where(np.logical_or(gt_detection == 1, gt_fwhm == 1))[0]
+            
+            for vortex_idx in vortex_indices:
+                if vortex_idx >= self.window_size:
+                    # Create a positive sample (the window ending at the vortex)
+                    pressure_window = pressure_values[vortex_idx-self.window_size:vortex_idx].copy()
+                    local_mean = np.mean(pressure_window)
+                    detrended_pressure = pressure_window - local_mean
+                    rolling_mean = pd.Series(detrended_pressure).rolling(window=20, min_periods=1).mean().values
+                    rolling_std = pd.Series(detrended_pressure).rolling(window=20, min_periods=1).std().fillna(0).values
+                    
+                    acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
+                    
+                    sequence = np.stack([detrended_pressure, acceleration], axis=1)
+                    sequences_list.append(sequence)
+                    labels_list.append(1)
+
+                    # Create a negative sample (a random window from a non-vortex area)
+                    # This helps the model learn to distinguish vortex shapes from other noise
+                    while True:
+                        random_idx = np.random.randint(self.window_size, len(pressure_values))
+                        if not np.any(gt_detection[random_idx-self.window_size:random_idx] == 1):
+                            break
+                    
+                    pressure_window_neg = pressure_values[random_idx-self.window_size:random_idx].copy()
+                    local_mean_neg = np.mean(pressure_window_neg)
+                    detrended_pressure_neg = pressure_window_neg - local_mean_neg
+                    rolling_mean_neg = pd.Series(detrended_pressure_neg).rolling(window=20, min_periods=1).mean().values
+                    rolling_std_neg = pd.Series(detrended_pressure_neg).rolling(window=20, min_periods=1).std().fillna(0).values
+                    
+                    acceleration_neg = np.diff(detrended_pressure_neg, n=2, prepend=[detrended_pressure_neg[0], detrended_pressure_neg[0]])
+
+                    sequence_neg = np.stack([detrended_pressure_neg, acceleration_neg], axis=1)
+                    sequences_list.append(sequence_neg)
+                    labels_list.append(0)
+
+            self.debug_print("\nBalanced data statistics (after local detrending):")
+            self.debug_print(f"Total sequences: {len(sequences_list)}")
+            self.debug_print(f"Vortex sequences: {sum(labels_list)}")
+
         sequences = np.array(sequences_list)
         labels = np.array(labels_list)
-        self.debug_print("\nSequence creation statistics:")
-        self.debug_print(f"Total sequences: {len(sequences)}")
-        self.debug_print(f"Vortex sequences: {sum(labels)}")
-        self.debug_print(f"Non-vortex sequences: {len(labels) - sum(labels)}")
-        self.debug_print(f"Final ratio: {(len(labels) - sum(labels)) / sum(labels):.2f}:1")
-        return sequences, labels, pressure_mean, pressure_std, roc_mean, roc_std, \
-               rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std
+        
+        # We no longer return normalization stats
+        return sequences, labels
         
     def temporal_focal_loss(self, gamma=1.5, alpha=None, temporal_weight=0.1):
         """Focal loss with temporal awareness.
@@ -262,13 +199,13 @@ class VortexLSTMModel:
         """Build the vortex prediction model with Bidirectional LSTM and temporal loss."""
         model = Sequential([
             Bidirectional(
-                LSTM(128,  # Increased units to handle more features
+                LSTM(64,  # Adjusted units for fewer features
                      kernel_regularizer=l2(0.0005),
                      recurrent_regularizer=l2(0.0005),
-                     return_sequences=False),  # We don't need sequences for next layer
+                     return_sequences=False),
                 input_shape=input_shape
             ),
-            Dense(64, activation='relu'),  # Increased units
+            Dense(32, activation='relu'), # Adjusted units
             Dropout(0.2),
             Dense(1, activation='sigmoid')
         ])
@@ -323,7 +260,7 @@ class VortexLSTMModel:
         
         # Train model
         self.debug_print("\nTraining vortex prediction model...")
-        self.model = self.build_model((self.window_size, 4), alpha=alpha, gamma=1.5)
+        self.model = self.build_model((self.window_size, 2), alpha=alpha, gamma=1.5)
         
         # Add learning rate scheduler with adjusted patience
         reduce_lr = ReduceLROnPlateau(
@@ -373,7 +310,7 @@ class VortexLSTMModel:
             raise ValueError(f"Need at least {self.window_size} pressure readings")
             
         current_readings = pressure_readings[-self.window_size:]
-        sequence = current_readings.reshape(1, self.window_size, 4)
+        sequence = current_readings.reshape(1, self.window_size, 2)
         return self.model.predict(sequence)[0][0]
     
     def evaluate(self, X_test, y_test):
@@ -436,74 +373,290 @@ class VortexLSTMModel:
             events.append((start, len(gt) - 1))
         return events
 
-    def evaluate_event_level(self, y_pred, window_starts, window_size, events):
-        """Evaluate predictions at the event level (grouping contiguous positives)."""
-        def get_event_ranges(binary_array, starts, window_size):
-            # Returns list of (start, end) indices for contiguous True regions
-            events = []
-            in_event = False
-            for i, val in enumerate(binary_array):
-                if val and not in_event:
-                    start = starts[i]
-                    in_event = True
-                elif not val and in_event:
-                    end = starts[i-1] + window_size - 1
-                    events.append((start, end))
-                    in_event = False
-            if in_event:
-                end = starts[len(binary_array)-1] + window_size - 1
-                events.append((start, end))
-            return events
-
-        # Group predicted positives into events
-        pred_events = get_event_ranges(y_pred, window_starts, window_size)
-        # True events are already provided as 'events'
-
-        matched_true = set()
-        matched_pred = set()
-        tp = 0
+    def evaluate_event_level(self, y_pred, window_starts, window_size, events, test_data):
+        """
+        Evaluate predictions at the event level.
+        A single positive prediction is a "detection".
+        A true event is considered "detected" if any detection falls within its range.
+        """
         fp = 0
-        fn = 0
-        earliness = []
+        # A set to store the indices of true events that have been detected.
+        # This prevents double-counting a single true event.
+        detected_true_events = set()
+        
+        # Create a quick lookup for true events for efficiency
+        # This maps each index to the event_id it belongs to.
+        point_to_event_map = {}
+        for event_idx, (start, end) in enumerate(events):
+            for i in range(start, end + 1):
+                point_to_event_map[i] = event_idx
+
+        # --- SCLK SANITY CHECK ---
+        print("\n[SCLK CHECK] True Event SCLK Ranges:")
+        for event_idx, (start, end) in enumerate(events[:5]): # Print first 5 for brevity
+            sclk_start = test_data['SCLK'].iloc[start]
+            sclk_end = test_data['SCLK'].iloc[end]
+            print(f"  - True Event {event_idx}: Index [{start}, {end}] -> SCLK [{sclk_start}, {sclk_end}]")
+        # --- END SCLK SANITY CHECK ---
 
         # --- DEBUG PRINTS ---
-        print("\n[DEBUG] Predicted event ranges:")
-        for i, (p_start, p_end) in enumerate(pred_events):
-            print(f"  Predicted event {i}: {p_start} to {p_end}")
-        print(f"[DEBUG] Number of predicted events: {len(pred_events)}")
-        print("[DEBUG] True event ranges:")
-        for j, (t_start, t_end) in enumerate(events):
-            print(f"  True event {j}: {t_start} to {t_end}")
+        print("\n[DEBUG] Using single-point detection logic.")
+        print(f"[DEBUG] Total positive predictions (potential detections): {np.sum(y_pred)}")
         print(f"[DEBUG] Number of true events: {len(events)}")
         # --- END DEBUG PRINTS ---
 
-        # For each predicted event, check for overlap with any true event
-        for i, (p_start, p_end) in enumerate(pred_events):
-            overlap = False
-            for j, (t_start, t_end) in enumerate(events):
-                if j in matched_true:
-                    continue
-                # Check for overlap
-                if p_end >= t_start and p_start <= t_end:
-                    tp += 1
-                    matched_true.add(j)
-                    matched_pred.add(i)
-                    # Earliness: how early did we detect the event?
-                    earliness.append(max(0, p_start - t_start))
-                    overlap = True
-                    print(f"[DEBUG] Predicted event {i} overlaps with true event {j}")
-                    break
-            if not overlap:
-                fp += 1
-                print(f"[DEBUG] Predicted event {i} does NOT overlap with any true event")
+        # Iterate through each prediction once
+        positive_prediction_count = 0
+        for i, prediction in enumerate(y_pred):
+            if prediction == 1:
+                positive_prediction_count += 1
+                # This is a positive prediction, a "detection"
+                detection_idx = window_starts[i]
 
-        # Any true event not matched is a false negative
-        fn = len(events) - len(matched_true)
-        print(f"[DEBUG] Number of TPs (overlaps): {tp}")
-        print(f"[DEBUG] Number of FPs: {fp}")
-        print(f"[DEBUG] Number of FNs: {fn}")
+                # --- SCLK SANITY CHECK (limited) ---
+                if positive_prediction_count <= 25:
+                    detection_sclk = test_data['SCLK'].iloc[detection_idx]
+                    print(f"[SCLK CHECK] Positive prediction #{positive_prediction_count} at pred_index={i} -> data_index={detection_idx} -> SCLK={detection_sclk}")
+                # --- END SCLK SANITY CHECK ---
+
+                # Check if this detection index corresponds to any true event
+                if detection_idx in point_to_event_map:
+                    # It's a true positive detection, mark the corresponding event as detected
+                    event_id = point_to_event_map[detection_idx]
+                    detected_true_events.add(event_id)
+                else:
+                    # This detection does not fall into any true event range, so it's a false positive.
+                    fp += 1
+        
+        # True Positives is the number of unique true events that were detected.
+        tp = len(detected_true_events)
+        
+        # False Negatives is the number of true events that were not detected.
+        fn = len(events) - tp
+
+        # Earliness is not relevant in this model.
+        earliness = []
+
+        print(f"[DEBUG] Number of TPs (unique detected events): {tp}")
+        print(f"[DEBUG] Number of FPs (false alarms): {fp}")
+        print(f"[DEBUG] Number of FNs (missed events): {fn}")
 
         return tp, fp, fn, earliness
+
+    def analyze_detection_patterns(self, y_pred, window_starts, events, test_data):
+        """Analyze pressure patterns around successful vs failed detections."""
+        import matplotlib.pyplot as plt
+        
+        # Create lookup for true events
+        point_to_event_map = {}
+        for event_idx, (start, end) in enumerate(events):
+            for i in range(start, end + 1):
+                point_to_event_map[i] = event_idx
+        
+        # Collect patterns
+        successful_patterns = []
+        failed_patterns = []
+        successful_sclks = []
+        failed_sclks = []
+        
+        window_size = 60  # Look at 60 points before and after detection
+        
+        for i, prediction in enumerate(y_pred):
+            if prediction == 1:  # Positive prediction
+                detection_idx = window_starts[i]
+                detection_sclk = test_data['SCLK'].iloc[detection_idx]
+                
+                # Get pressure pattern around this detection
+                start_idx = max(0, detection_idx - window_size)
+                end_idx = min(len(test_data), detection_idx + window_size + 1)
+                pressure_pattern = test_data['PRESSURE'].iloc[start_idx:end_idx].values
+                
+                if detection_idx in point_to_event_map:
+                    # Successful detection
+                    successful_patterns.append(pressure_pattern)
+                    successful_sclks.append(detection_sclk)
+                else:
+                    # False alarm
+                    failed_patterns.append(pressure_pattern)
+                    failed_sclks.append(detection_sclk)
+        
+        # Convert to arrays
+        successful_patterns = np.array(successful_patterns)
+        failed_patterns = np.array(failed_patterns)
+        
+        print(f"\n[PATTERN ANALYSIS] Successful detections: {len(successful_patterns)}")
+        print(f"[PATTERN ANALYSIS] False alarms: {len(failed_patterns)}")
+        
+        if len(successful_patterns) > 0 and len(failed_patterns) > 0:
+            # Calculate statistics
+            mean_successful = np.mean(successful_patterns, axis=0)
+            mean_failed = np.mean(failed_patterns, axis=0)
+            std_successful = np.std(successful_patterns, axis=0)
+            std_failed = np.std(failed_patterns, axis=0)
+            
+            print(f"[PATTERN ANALYSIS] Mean pressure in successful patterns: {np.mean(mean_successful):.2f} ± {np.mean(std_successful):.2f}")
+            print(f"[PATTERN ANALYSIS] Mean pressure in failed patterns: {np.mean(mean_failed):.2f} ± {np.mean(std_failed):.2f}")
+            print(f"[PATTERN ANALYSIS] Pressure difference: {np.mean(mean_successful - mean_failed):.2f}")
+            
+            # Plot patterns
+            plt.figure(figsize=(15, 10))
+            
+            # Plot mean patterns
+            plt.subplot(2, 2, 1)
+            time_points = np.arange(-window_size, window_size + 1)
+            plt.plot(time_points, mean_successful, label='Successful Detections', color='green', linewidth=2)
+            plt.plot(time_points, mean_failed, label='False Alarms', color='red', linewidth=2)
+            plt.fill_between(time_points, mean_successful - std_successful, mean_successful + std_successful, 
+                           color='green', alpha=0.2)
+            plt.fill_between(time_points, mean_failed - std_failed, mean_failed + std_failed, 
+                           color='red', alpha=0.2)
+            plt.title('Mean Pressure Patterns Around Detections')
+            plt.xlabel('Time Points (relative to detection)')
+            plt.ylabel('Pressure')
+            plt.legend()
+            plt.grid(True)
+            
+            # Plot difference
+            plt.subplot(2, 2, 2)
+            plt.plot(time_points, mean_successful - mean_failed, color='blue', linewidth=2)
+            plt.title('Difference (Successful - Failed)')
+            plt.xlabel('Time Points (relative to detection)')
+            plt.ylabel('Pressure Difference')
+            plt.grid(True)
+            
+            # Plot individual patterns (first few)
+            plt.subplot(2, 2, 3)
+            for i in range(min(5, len(successful_patterns))):
+                plt.plot(time_points, successful_patterns[i], color='green', alpha=0.3)
+            for i in range(min(5, len(failed_patterns))):
+                plt.plot(time_points, failed_patterns[i], color='red', alpha=0.3)
+            plt.title('Individual Patterns (First 5 of each)')
+            plt.xlabel('Time Points (relative to detection)')
+            plt.ylabel('Pressure')
+            plt.grid(True)
+            
+            # Plot SCLK distribution
+            plt.subplot(2, 2, 4)
+            if len(successful_sclks) > 0:
+                plt.hist(successful_sclks, bins=20, alpha=0.7, label='Successful', color='green')
+            if len(failed_sclks) > 0:
+                plt.hist(failed_sclks, bins=50, alpha=0.7, label='Failed', color='red')
+            plt.title('SCLK Distribution of Detections')
+            plt.xlabel('SCLK')
+            plt.ylabel('Count')
+            plt.legend()
+            plt.grid(True)
+            
+            plt.tight_layout()
+            plt.savefig('detection_patterns.png')
+            plt.close()
+            
+            print(f"[PATTERN ANALYSIS] Pattern analysis saved to detection_patterns.png")
+        
+        return {
+            'successful_patterns': successful_patterns,
+            'failed_patterns': failed_patterns,
+            'successful_sclks': successful_sclks,
+            'failed_sclks': failed_sclks
+        }
+
+    def analyze_confidence_distribution(self, y_pred, y_pred_proba, window_starts, events, test_data):
+        """Analyze confidence scores for successful vs failed detections."""
+        import matplotlib.pyplot as plt
+        
+        # Create lookup for true events
+        point_to_event_map = {}
+        for event_idx, (start, end) in enumerate(events):
+            for i in range(start, end + 1):
+                point_to_event_map[i] = event_idx
+        
+        # Collect confidence scores
+        successful_confidences = []
+        failed_confidences = []
+        
+        for i, (prediction, confidence) in enumerate(zip(y_pred, y_pred_proba)):
+            if prediction == 1:  # Positive prediction
+                detection_idx = window_starts[i]
+                
+                if detection_idx in point_to_event_map:
+                    # Successful detection
+                    successful_confidences.append(confidence)
+                else:
+                    # False alarm
+                    failed_confidences.append(confidence)
+        
+        successful_confidences = np.array(successful_confidences)
+        failed_confidences = np.array(failed_confidences)
+        
+        print(f"\n[CONFIDENCE ANALYSIS] Successful detections: {len(successful_confidences)}")
+        print(f"[CONFIDENCE ANALYSIS] False alarms: {len(failed_confidences)}")
+        
+        if len(successful_confidences) > 0:
+            print(f"[CONFIDENCE ANALYSIS] Successful confidence - Mean: {np.mean(successful_confidences):.4f}, Std: {np.std(successful_confidences):.4f}")
+        if len(failed_confidences) > 0:
+            print(f"[CONFIDENCE ANALYSIS] Failed confidence - Mean: {np.mean(failed_confidences):.4f}, Std: {np.std(failed_confidences):.4f}")
+        
+        if len(successful_confidences) > 0 and len(failed_confidences) > 0:
+            print(f"[CONFIDENCE ANALYSIS] Confidence difference: {np.mean(successful_confidences) - np.mean(failed_confidences):.4f}")
+            
+            # Plot confidence distributions
+            plt.figure(figsize=(12, 5))
+            
+            plt.subplot(1, 2, 1)
+            plt.hist(successful_confidences, bins=20, alpha=0.7, label='Successful', color='green', density=True)
+            plt.hist(failed_confidences, bins=50, alpha=0.7, label='Failed', color='red', density=True)
+            plt.title('Confidence Distribution')
+            plt.xlabel('Confidence Score')
+            plt.ylabel('Density')
+            plt.legend()
+            plt.grid(True)
+            
+            # Plot confidence vs threshold analysis
+            plt.subplot(1, 2, 2)
+            thresholds = np.linspace(0.1, 0.9, 81)
+            successful_counts = []
+            failed_counts = []
+            
+            for threshold in thresholds:
+                successful_counts.append(np.sum(successful_confidences >= threshold))
+                failed_counts.append(np.sum(failed_confidences >= threshold))
+            
+            plt.plot(thresholds, successful_counts, label='Successful', color='green', linewidth=2)
+            plt.plot(thresholds, failed_counts, label='Failed', color='red', linewidth=2)
+            plt.title('Detections vs Threshold')
+            plt.xlabel('Confidence Threshold')
+            plt.ylabel('Number of Detections')
+            plt.legend()
+            plt.grid(True)
+            
+            plt.tight_layout()
+            plt.savefig('confidence_analysis.png')
+            plt.close()
+            
+            print(f"[CONFIDENCE ANALYSIS] Confidence analysis saved to confidence_analysis.png")
+            
+            # Suggest optimal threshold
+            if len(successful_confidences) > 0:
+                # Find threshold that maximizes successful while minimizing failed
+                best_ratio = 0
+                best_threshold = 0.5
+                
+                for threshold in thresholds:
+                    successful_above = np.sum(successful_confidences >= threshold)
+                    failed_above = np.sum(failed_confidences >= threshold)
+                    
+                    if failed_above > 0:
+                        ratio = successful_above / failed_above
+                        if ratio > best_ratio:
+                            best_ratio = ratio
+                            best_threshold = threshold
+                
+                print(f"[CONFIDENCE ANALYSIS] Suggested threshold: {best_threshold:.3f} (ratio: {best_ratio:.2f})")
+        
+        return {
+            'successful_confidences': successful_confidences,
+            'failed_confidences': failed_confidences
+        }
 
     def evaluate_with_windows(self, test_results, gt_windows, test_data):
         """Evaluate model performance considering ground truth windows.
@@ -532,7 +685,13 @@ class VortexLSTMModel:
         events = self.extract_event_ranges(test_data['gt_detection_win'].values, test_data['gt_fwhm'].values)
         
         # Evaluate at event level
-        tp, fp, fn, earliness = self.evaluate_event_level(y_pred, window_starts, self.window_size, events)
+        tp, fp, fn, earliness = self.evaluate_event_level(y_pred, window_starts, self.window_size, events, test_data)
+        
+        # Run pattern analysis
+        pattern_results = self.analyze_detection_patterns(y_pred, window_starts, events, test_data)
+        
+        # Run confidence analysis
+        confidence_results = self.analyze_confidence_distribution(y_pred, y_pred_proba, window_starts, events, test_data)
         
         # Calculate event-level metrics
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
@@ -1009,8 +1168,7 @@ def plot_confidence_timeline(data, y_pred_proba, detection_windows, save_path='c
 def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame) -> dict:
     """Evaluate model performance on the full dataset."""
     debug_print(model.debug, "\nPreparing sequences from full dataset (no sampling)...")
-    X_full, y_full, pressure_mean, pressure_std, roc_mean, roc_std, \
-    rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std = model.prepare_sequences(data, apply_sampling=False)
+    X_full, y_full = model.prepare_sequences(data, apply_sampling=False)
     
     debug_print(model.debug, "Making predictions on full dataset...")
     y_pred_proba = model.predict(X_full)
@@ -1131,6 +1289,7 @@ def main():
     parser.add_argument('--analyze', action='store_true', help='Analyze pressure patterns')
     parser.add_argument('--full_eval', action='store_true', help='Run evaluation on full dataset')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('--window_size', type=int, default=30, help='Size of the input window for the LSTM.')
     args = parser.parse_args()
     
     print("Starting LSTM model training...")
@@ -1187,26 +1346,17 @@ def main():
     print(f"Test: {len(test_data)} samples")
     
     # Initialize model
-    model = VortexLSTMModel(window_size=60, debug=args.debug)
+    model = VortexLSTMModel(window_size=args.window_size, debug=args.debug)
     
     # Prepare sequences for each split
     print("\nPreparing training sequences...")
-    X_train, y_train, pressure_mean, pressure_std, roc_mean, roc_std, \
-    rolling_mean_mean, rolling_mean_std, rolling_std_mean, rolling_std_std = model.prepare_sequences(train_data, apply_sampling=True)
+    X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True)
     
     print("\nPreparing validation sequences...")
-    X_val, y_val, _, _, _, _, _, _, _, _ = model.prepare_sequences(val_data, apply_sampling=True, 
-        pressure_mean=pressure_mean, pressure_std=pressure_std,
-        roc_mean=roc_mean, roc_std=roc_std,
-        rolling_mean_mean=rolling_mean_mean, rolling_mean_std=rolling_mean_std,
-        rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std)
+    X_val, y_val = model.prepare_sequences(val_data, apply_sampling=True)
     
     print("\nPreparing test sequences...")
-    X_test, y_test, _, _, _, _, _, _, _, _ = model.prepare_sequences(test_data, apply_sampling=False,
-        pressure_mean=pressure_mean, pressure_std=pressure_std,
-        roc_mean=roc_mean, roc_std=roc_std,
-        rolling_mean_mean=rolling_mean_mean, rolling_mean_std=rolling_mean_std,
-        rolling_std_mean=rolling_std_mean, rolling_std_std=rolling_std_std)
+    X_test, y_test = model.prepare_sequences(test_data, apply_sampling=False)
     
     # Print class distribution
     print("\nClass distribution in sets:")
