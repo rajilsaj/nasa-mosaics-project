@@ -10,12 +10,18 @@ from sklearn.preprocessing import MinMaxScaler
 from pathlib import Path
 import time
 import argparse
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt  # Moved to plotting_utils.py
 import joblib
 import tensorflow.keras.backend as K
 from tensorflow.keras.regularizers import l2
 import gc
 import numpy as np
+import feature_engineering
+from evaluation_utils import compute_classification_metrics, sweep_confidence_thresholds
+from plotting_utils import (plot_confidence_distribution, plot_confidence_timeline, 
+                           plot_detection_patterns, plot_confidence_analysis, 
+                           plot_pressure_patterns, plot_training_history,
+                           plot_continued_drop_analysis, plot_sharpest_n_point_drops)
 print("Using GPU:", tf.config.list_physical_devices('GPU'))
 mixed_precision.set_global_policy("mixed_float16")
 
@@ -24,6 +30,12 @@ mixed_precision.set_global_policy("mixed_float16")
 # Add utils directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent.parent / 'utils'))
 from visualize_lstm_metrics import visualize_lstm_metrics, create_lstm_report
+
+# Remove sys.path.append for feature_engineering and any other sys.path hacks for code modules now imported normally
+try:
+    sys.path.remove(str(Path(__file__).parent.parent.parent.parent / 'feature_engineering'))
+except ValueError:
+    pass
 
 def debug_print(debug: bool, *args, **kwargs):
     """Print debug information if debug flag is set."""
@@ -317,17 +329,6 @@ class VortexLSTMModel:
         """Make predictions using the model."""
         return self.model.predict(X).flatten()
     
-    def predict_real_time(self, pressure_readings: np.ndarray) -> float:
-        """Make real-time predictions on new pressure readings."""
-        if len(pressure_readings) < self.window_size:
-            raise ValueError(f"Need at least {self.window_size} pressure readings")
-            
-        current_readings = pressure_readings[-self.window_size:]
-        # Note: This real-time function will need to know which features to build.
-        # This is a simplification for now.
-        sequence = current_readings.reshape(1, self.window_size, current_readings.shape[1])
-        return self.model.predict(sequence)[0][0]
-    
     def evaluate(self, X_test, y_test):
         """Evaluate model performance."""
         from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
@@ -460,7 +461,7 @@ class VortexLSTMModel:
 
     def analyze_detection_patterns(self, y_pred, window_starts, events, test_data):
         """Analyze pressure patterns around successful vs failed detections."""
-        import matplotlib.pyplot as plt
+        # import matplotlib.pyplot as plt  # Moved to plotting_utils.py
         
         # Create lookup for true events
         point_to_event_map = {}
@@ -495,7 +496,7 @@ class VortexLSTMModel:
         # All subsequent pattern analysis, continued drop analysis, and plots should use these causal patterns and time_points.
         # In continued drop analysis, use only these causal patterns as well.
         
-        # Convert to arrays
+        # Convert to arrays (after all appends)
         successful_patterns = np.array(successful_patterns)
         failed_patterns = np.array(failed_patterns)
         
@@ -542,85 +543,11 @@ class VortexLSTMModel:
             sharp_drop_duration_successful = [drop_duration(p, threshold=0.1) for p in successful_patterns]
             sharp_drop_duration_failed = [drop_duration(p, threshold=0.1) for p in failed_patterns]
 
-            # Update figure to 3x3 grid for the new subplots
-            plt.figure(figsize=(22, 14))
-
-            # 1. Mean patterns
-            plt.subplot(3, 3, 1)
-            plt.plot(time_points, mean_successful, label='Successful Detections', color='green', linewidth=2)
-            plt.plot(time_points, mean_failed, label='False Alarms', color='red', linewidth=2)
-            plt.fill_between(time_points, mean_successful - std_successful, mean_successful + std_successful, color='green', alpha=0.2)
-            plt.fill_between(time_points, mean_failed - std_failed, mean_failed + std_failed, color='red', alpha=0.2)
-            plt.title('Mean Pressure Patterns Around Detections')
-            plt.xlabel('Time Points (relative to detection)')
-            plt.ylabel('Pressure')
-            plt.legend()
-            plt.grid(True)
-
-            # 2. Difference
-            plt.subplot(3, 3, 2)
-            plt.plot(time_points, mean_successful - mean_failed, color='blue', linewidth=2)
-            plt.title('Difference (Successful - Failed)')
-            plt.xlabel('Time Points (relative to detection)')
-            plt.ylabel('Pressure Difference')
-            plt.grid(True)
-
-            # 3. Individual patterns
-            plt.subplot(3, 3, 4)
-            for i in range(min(30, len(successful_patterns))):
-                plt.plot(time_points, successful_patterns[i], color='green', alpha=0.3)
-            for i in range(min(30, len(failed_patterns))):
-                plt.plot(time_points, failed_patterns[i], color='red', alpha=0.3)
-            plt.title('Individual Patterns (First 30 of each)')
-            plt.xlabel('Time Points (relative to detection)')
-            plt.ylabel('Pressure')
-            plt.grid(True)
-
-            # 4. SCLK distribution
-            plt.subplot(3, 3, 5)
-            if len(successful_sclks) > 0:
-                plt.hist(successful_sclks, bins=20, alpha=0.7, label='Successful', color='green')
-            if len(failed_sclks) > 0:
-                plt.hist(failed_sclks, bins=50, alpha=0.7, label='Failed', color='red')
-            plt.title('SCLK Distribution of Detections')
-            plt.xlabel('SCLK')
-            plt.ylabel('Count')
-            plt.legend()
-            plt.grid(True)
-
-            # 5. Minimum slope histogram
-            plt.subplot(3, 3, 6)
-            plt.hist(min_slope_successful, bins=30, alpha=0.7, label='Successful', color='green', range=(-1, 0.1))
-            plt.hist(min_slope_failed, bins=30, alpha=0.7, label='Failed', color='red', range=(-1, 0.1))
-            plt.title('Distribution of Minimum Slope in Detection Windows')
-            plt.xlabel('Minimum Slope (sharpest drop)')
-            plt.ylabel('Count')
-            plt.legend()
-            plt.grid(True)
-
-            # 6. Sharpest short-window slope (3-point drop)
-            plt.subplot(3, 3, 7)
-            plt.hist(short_window_slope_successful, bins=30, alpha=0.7, label='Successful', color='green', range=(-1, 0.1))
-            plt.hist(short_window_slope_failed, bins=30, alpha=0.7, label='Failed', color='red', range=(-1, 0.1))
-            plt.title('Sharpest 3-Point Drop in Detection Windows')
-            plt.xlabel('Max 3-Point Drop')
-            plt.ylabel('Count')
-            plt.legend()
-            plt.grid(True)
-
-            # 7. Drop duration
-            plt.subplot(3, 3, 8)
-            plt.hist(sharp_drop_duration_successful, bins=20, alpha=0.7, label='Successful', color='green')
-            plt.hist(sharp_drop_duration_failed, bins=20, alpha=0.7, label='Failed', color='red')
-            plt.title('Drop Duration in Detection Windows')
-            plt.xlabel('Drop Duration (points)')
-            plt.ylabel('Count')
-            plt.legend()
-            plt.grid(True)
-
-            plt.tight_layout()
-            plt.savefig('detection_patterns.png')
-            plt.close()
+            # Plot detection patterns using the plotting module
+            plot_detection_patterns(successful_patterns, failed_patterns, successful_sclks, failed_sclks,
+                                  min_slope_successful, min_slope_failed, short_window_slope_successful, 
+                                  short_window_slope_failed, sharp_drop_duration_successful, sharp_drop_duration_failed,
+                                  time_points, mean_successful, mean_failed, std_successful, std_failed)
             
             print(f"[PATTERN ANALYSIS] Pattern analysis saved to detection_patterns.png")
         
@@ -633,7 +560,7 @@ class VortexLSTMModel:
 
     def analyze_confidence_distribution(self, y_pred, y_pred_proba, window_starts, events, test_data):
         """Analyze confidence scores for successful vs failed detections."""
-        import matplotlib.pyplot as plt
+        # import matplotlib.pyplot as plt  # Moved to plotting_utils.py
         
         # Create lookup for true events
         point_to_event_map = {}
@@ -670,39 +597,8 @@ class VortexLSTMModel:
         if len(successful_confidences) > 0 and len(failed_confidences) > 0:
             print(f"[CONFIDENCE ANALYSIS] Confidence difference: {np.mean(successful_confidences) - np.mean(failed_confidences):.4f}")
             
-            # Plot confidence distributions
-            plt.figure(figsize=(12, 5))
-            
-            plt.subplot(1, 2, 1)
-            plt.hist(successful_confidences, bins=20, alpha=0.7, label='Successful', color='green', density=True)
-            plt.hist(failed_confidences, bins=50, alpha=0.7, label='Failed', color='red', density=True)
-            plt.title('Confidence Distribution')
-            plt.xlabel('Confidence Value')
-            plt.ylabel('Density')
-            plt.legend()
-            plt.grid(True)
-            
-            # Plot confidence vs threshold analysis
-            plt.subplot(1, 2, 2)
-            thresholds = np.linspace(0.1, 0.9, 81)
-            successful_counts = []
-            failed_counts = []
-            
-            for threshold in thresholds:
-                successful_counts.append(np.sum(successful_confidences >= threshold))
-                failed_counts.append(np.sum(failed_confidences >= threshold))
-            
-            plt.plot(thresholds, successful_counts, label='Successful', color='green', linewidth=2)
-            plt.plot(thresholds, failed_counts, label='Failed', color='red', linewidth=2)
-            plt.title('Detections vs Threshold')
-            plt.xlabel('Confidence Threshold')
-            plt.ylabel('Number of Detections')
-            plt.legend()
-            plt.grid(True)
-            
-            plt.tight_layout()
-            plt.savefig('confidence_analysis.png')
-            plt.close()
+            # Plot confidence analysis using the plotting module
+            plot_confidence_analysis(successful_confidences, failed_confidences)
             
             print(f"[CONFIDENCE ANALYSIS] Confidence analysis saved to confidence_analysis.png")
             
@@ -711,6 +607,7 @@ class VortexLSTMModel:
                 # Find threshold that maximizes successful while minimizing failed
                 best_ratio = 0
                 best_threshold = 0.5
+                thresholds = np.linspace(0.1, 0.9, 81)
                 
                 for threshold in thresholds:
                     successful_above = np.sum(successful_confidences >= threshold)
@@ -729,6 +626,8 @@ class VortexLSTMModel:
             'failed_confidences': failed_confidences
         }
 
+
+
     def evaluate_with_windows(self, test_results, gt_windows, test_data):
         """Evaluate model performance considering ground truth windows.
         
@@ -738,7 +637,7 @@ class VortexLSTMModel:
             test_data: Original test data DataFrame containing gt_detection_win
         """
         from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
-        import matplotlib.pyplot as plt
+        # import matplotlib.pyplot as plt  # Moved to plotting_utils.py
         
         self.debug_print("\nDebug: Window-based evaluation")
         self.debug_print(f"Number of ground truth windows: {len(gt_windows)}")
@@ -821,310 +720,6 @@ class VortexLSTMModel:
             'y_pred_proba': y_pred_proba
         }
 
-    def analyze_learned_patterns(self, data: pd.DataFrame, y_pred: np.ndarray, window_size: int = 60):
-        """Analyze what patterns the model is learning."""
-        import matplotlib.pyplot as plt
-        
-        # Get indices where model predicted vortex
-        pred_vortex_indices = np.where(y_pred == 1)[0]
-        
-        # Get indices of actual vortices
-        gt_combined = np.logical_or(data['gt_detection_win'] == 1, data['gt_fwhm'] == 1)
-        true_vortex_indices = np.where(gt_combined)[0]
-        
-        # Collect pressure patterns
-        pred_vortex_patterns = []
-        true_vortex_patterns = []
-        
-        # Get patterns for predicted vortices
-        for idx in pred_vortex_indices:
-            if idx >= window_size and idx + window_size < len(data):
-                pattern = data['PRESSURE'].iloc[idx-window_size:idx+window_size].values
-                pred_vortex_patterns.append(pattern)
-        
-        # Get patterns for true vortices
-        for idx in true_vortex_indices:
-            if idx >= window_size and idx + window_size < len(data):
-                pattern = data['PRESSURE'].iloc[idx-window_size:idx+window_size].values
-                true_vortex_patterns.append(pattern)
-        
-        # Convert to numpy arrays
-        pred_vortex_patterns = np.array(pred_vortex_patterns)
-        true_vortex_patterns = np.array(true_vortex_patterns)
-        
-        # Calculate statistics
-        mean_pred = np.mean(pred_vortex_patterns, axis=0)
-        mean_true = np.mean(true_vortex_patterns, axis=0)
-        std_pred = np.std(pred_vortex_patterns, axis=0)
-        std_true = np.std(true_vortex_patterns, axis=0)
-        
-        # Plot the patterns
-        plt.figure(figsize=(15, 10))
-        
-        # Plot mean patterns
-        plt.subplot(2, 1, 1)
-        plt.plot(mean_pred, label='Predicted Vortex Pattern', color='red')
-        plt.plot(mean_true, label='True Vortex Pattern', color='blue')
-        plt.fill_between(range(len(mean_pred)), 
-                        mean_pred - std_pred, 
-                        mean_pred + std_pred, 
-                        color='red', alpha=0.2)
-        plt.fill_between(range(len(mean_true)), 
-                        mean_true - std_true, 
-                        mean_true + std_true, 
-                        color='blue', alpha=0.2)
-        plt.title('Mean Pressure Patterns')
-        plt.xlabel('Time Steps')
-        plt.ylabel('Pressure')
-        plt.legend()
-        
-        # Plot difference
-        plt.subplot(2, 1, 2)
-        plt.plot(mean_pred - mean_true, label='Difference (Pred - True)', color='green')
-        plt.title('Difference Between Predicted and True Patterns')
-        plt.xlabel('Time Steps')
-        plt.ylabel('Pressure Difference')
-        plt.legend()
-        
-        plt.tight_layout()
-        plt.savefig('learned_patterns.png')
-        plt.close()
-        
-        # Print statistics
-        print("\nPattern Analysis:")
-        print(f"Number of predicted vortex patterns: {len(pred_vortex_patterns)}")
-        print(f"Number of true vortex patterns: {len(true_vortex_patterns)}")
-        print(f"Mean pressure in predicted patterns: {np.mean(mean_pred):.2f} ± {np.mean(std_pred):.2f}")
-        print(f"Mean pressure in true patterns: {np.mean(mean_true):.2f} ± {np.mean(std_true):.2f}")
-        print(f"Max difference between patterns: {np.max(np.abs(mean_pred - mean_true)):.2f}")
-        print(f"Average difference between patterns: {np.mean(np.abs(mean_pred - mean_true)):.2f}")
-        
-        # Analyze rate of change patterns
-        pred_roc_patterns = []
-        true_roc_patterns = []
-        
-        # Get ROC patterns for predicted vortices
-        for idx in pred_vortex_indices:
-            if idx >= window_size and idx + window_size < len(data):
-                pattern = np.diff(data['PRESSURE'].iloc[idx-window_size:idx+window_size].values)
-                pred_roc_patterns.append(pattern)
-        
-        # Get ROC patterns for true vortices
-        for idx in true_vortex_indices:
-            if idx >= window_size and idx + window_size < len(data):
-                pattern = np.diff(data['PRESSURE'].iloc[idx-window_size:idx+window_size].values)
-                true_roc_patterns.append(pattern)
-        
-        # Convert to numpy arrays
-        pred_roc_patterns = np.array(pred_roc_patterns)
-        true_roc_patterns = np.array(true_roc_patterns)
-        
-        # Calculate statistics
-        mean_pred_roc = np.mean(pred_roc_patterns, axis=0)
-        mean_true_roc = np.mean(true_roc_patterns, axis=0)
-        std_pred_roc = np.std(pred_roc_patterns, axis=0)
-        std_true_roc = np.std(true_roc_patterns, axis=0)
-        
-        # Plot ROC patterns
-        plt.figure(figsize=(15, 10))
-        
-        # Plot mean ROC patterns
-        plt.subplot(2, 1, 1)
-        plt.plot(mean_pred_roc, label='Predicted Vortex ROC', color='red')
-        plt.plot(mean_true_roc, label='True Vortex ROC', color='blue')
-        plt.fill_between(range(len(mean_pred_roc)), 
-                        mean_pred_roc - std_pred_roc, 
-                        mean_pred_roc + std_pred_roc, 
-                        color='red', alpha=0.2)
-        plt.fill_between(range(len(mean_true_roc)), 
-                        mean_true_roc - std_true_roc, 
-                        mean_true_roc + std_true_roc, 
-                        color='blue', alpha=0.2)
-        plt.title('Mean Rate of Change Patterns')
-        plt.xlabel('Time Steps')
-        plt.ylabel('Rate of Change')
-        plt.legend()
-        
-        # Plot ROC difference
-        plt.subplot(2, 1, 2)
-        plt.plot(mean_pred_roc - mean_true_roc, label='Difference (Pred - True)', color='green')
-        plt.title('Difference Between Predicted and True ROC Patterns')
-        plt.xlabel('Time Steps')
-        plt.ylabel('ROC Difference')
-        plt.legend()
-        
-        plt.tight_layout()
-        plt.savefig('learned_roc_patterns.png')
-        plt.close()
-        
-        # Print ROC statistics
-        print("\nROC Pattern Analysis:")
-        print(f"Mean ROC in predicted patterns: {np.mean(mean_pred_roc):.2f} ± {np.mean(std_pred_roc):.2f}")
-        print(f"Mean ROC in true patterns: {np.mean(mean_true_roc):.2f} ± {np.mean(std_true_roc):.2f}")
-        print(f"Max ROC difference between patterns: {np.max(np.abs(mean_pred_roc - mean_true_roc)):.2f}")
-        print(f"Average ROC difference between patterns: {np.mean(np.abs(mean_pred_roc - mean_true_roc)):.2f}")
-
-    def evaluate_triggered_event_detection(self, y_pred, test_data):
-        """Evaluate using triggered event detection logic with window alignment."""
-        gt_detection = test_data['gt_detection_win'].values
-        gt_fwhm = test_data['gt_fwhm'].values
-        gt_combined = np.logical_or(gt_detection == 1, gt_fwhm == 1)
-        n_samples = len(gt_combined)
-        window_size = self.window_size
-
-        # Find all true event windows
-        true_events = []
-        in_event = False
-        for i in range(n_samples):
-            if gt_combined[i] and not in_event:
-                start = i
-                in_event = True
-            elif not gt_combined[i] and in_event:
-                end = i - 1
-                true_events.append((start, end))
-                in_event = False
-        if in_event:
-            true_events.append((start, n_samples - 1))
-
-        # Group predicted positives into events (contiguous runs)
-        pred_events = []
-        in_pred = False
-        for i, val in enumerate(y_pred):
-            if val == 1 and not in_pred:
-                start = i
-                in_pred = True
-            elif val == 0 and in_pred:
-                end = i - 1
-                pred_events.append((start, end))
-                in_pred = False
-        if in_pred:
-            pred_events.append((start, len(y_pred) - 1))
-
-        # For each predicted event, expand start index by -window_size (min 0)
-        pred_events_aligned = [(max(0, start - window_size), end) for (start, end) in pred_events]
-
-        detected_true_events = set()
-        detected_pred_events = set()
-        for p_idx, (p_start, p_end) in enumerate(pred_events_aligned):
-            for t_idx, (t_start, t_end) in enumerate(true_events):
-                # Check for overlap
-                if p_end >= t_start and p_start <= t_end:
-                    detected_true_events.add(t_idx)
-                    detected_pred_events.add(p_idx)
-
-        tp = len(detected_true_events)
-        fp = len(pred_events_aligned) - len(detected_pred_events)
-        fn = len(true_events) - tp
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
-        print("\nTriggered Event Detection Evaluation (Window-Aligned):")
-        print(f"Triggered Event-based Precision: {precision:.4f}")
-        print(f"Triggered Event-based Recall: {recall:.4f}")
-        print(f"Triggered Event-based F1-Score: {f1:.4f}")
-        print(f"Triggered Event-based True Positives: {tp}")
-        print(f"Triggered Event-based False Positives: {fp}")
-        print(f"Triggered Event-based False Negatives: {fn}")
-        print(f"Total True Events: {len(true_events)}")
-        return {
-            'precision': precision,
-            'recall': recall,
-            'f1': f1,
-            'tp': tp,
-            'fp': fp,
-            'fn': fn,
-            'n_true_events': len(true_events)
-        }
-
-    def evaluate_triggered_pointwise(self, y_pred, test_data):
-        """
-        Evaluate using a custom 'latch-on' pointwise logic.
-        Once an event is 'triggered' by a positive prediction, all subsequent points
-        within that true event are counted as True Positives.
-        """
-        # --- Setup ---
-        gt_detection = test_data['gt_detection_win'].values
-        gt_fwhm = test_data['gt_fwhm'].values
-        gt_combined = np.logical_or(gt_detection == 1, gt_fwhm == 1)
-        n_samples = len(gt_combined)
-        window_size = self.window_size
-
-        # Create a full-length prediction array aligned with the main data array
-        aligned_y_pred = np.zeros(n_samples, dtype=int)
-        # Predictions from the model correspond to the END of a window.
-        # So a prediction at y_pred[i] corresponds to test_data index i + window_size - 1
-        pred_indices = np.arange(len(y_pred)) + window_size -1
-        # Ensure we don't go out of bounds
-        valid_indices = pred_indices < n_samples
-        aligned_y_pred[pred_indices[valid_indices]] = y_pred[valid_indices]
-
-        # 1. Identify all ground truth event windows
-        true_events = self.extract_event_ranges(gt_detection, gt_fwhm)
-
-        # 2. For each true event, find the index of the *first* positive prediction
-        trigger_indices = {}  # Maps event_id -> trigger_index
-        for event_idx, (start, end) in enumerate(true_events):
-            first_trigger = -1
-            # Look for a trigger within the event's span
-            for i in range(start, end + 1):
-                if aligned_y_pred[i] == 1:
-                    first_trigger = i
-                    break  # Found the first one
-            trigger_indices[event_idx] = first_trigger # Will be -1 if not triggered
-
-        # 3. Calculate metrics point-by-point based on the "latch-on" logic
-        tp, fp, fn, tn = 0, 0, 0, 0
-        point_to_event_map = {i: eid for eid, (start, end) in enumerate(true_events) for i in range(start, end + 1)}
-
-        for i in range(n_samples):
-            is_gt_positive = gt_combined[i]
-
-            if is_gt_positive:
-                event_id = point_to_event_map[i]
-                trigger_idx = trigger_indices[event_id]
-
-                if trigger_idx == -1:
-                    # The event was never triggered, so this point is a False Negative
-                    fn += 1
-                else:
-                    # The event was triggered at some point
-                    if i < trigger_idx:
-                        # This point is before the first trigger, so it's a miss
-                        fn += 1
-                    else:
-                        # This point is at or after the trigger, count as a True Positive
-                        tp += 1
-            else:
-                # This is a non-vortex point
-                if aligned_y_pred[i] == 1:
-                    fp += 1
-                else:
-                    tn += 1
-                    
-        # --- Final Metrics Calculation ---
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
-        print("\nTriggered Pointwise Evaluation (Corrected 'Latch-on' Logic):")
-        print(f"Triggered Pointwise Precision: {precision:.4f}")
-        print(f"Triggered Pointwise Recall: {recall:.4f}")
-        print(f"Triggered Pointwise F1-Score: {f1:.4f}")
-        print(f"Triggered Pointwise True Positives: {tp}")
-        print(f"Triggered Pointwise False Positives: {fp}")
-        print(f"Triggered Pointwise True Negatives: {tn}")
-        print(f"Triggered Pointwise False Negatives: {fn}")
-        return {
-            'precision': precision,
-            'recall': recall,
-            'f1': f1,
-            'tp': tp,
-            'fp': fp,
-            'tn': tn,
-            'fn': fn
-        }
-
 def find_detection_windows(data: pd.DataFrame, debug: bool = False) -> list:
     """Find all detection windows (where gt_detection_win == 1 or gt_fwhm == 1)."""
     windows = []
@@ -1175,56 +770,6 @@ def find_detection_windows(data: pd.DataFrame, debug: bool = False) -> list:
             debug_print(debug, "gt_fwhm:", data['gt_fwhm'].iloc[start:end].values)
     
     return windows
-
-def normalize_pressure(data: pd.DataFrame) -> pd.DataFrame:
-    """Normalize pressure values using Z-score standardization."""
-    data = data.copy()
-    mean_pressure = data['PRESSURE'].mean()
-    std_pressure = data['PRESSURE'].std()
-    data['PRESSURE'] = (data['PRESSURE'] - mean_pressure) / std_pressure
-    return data
-
-def plot_confidence_distribution(y_true, y_pred_proba, save_path='confidence_distribution.png'):
-    """Plot distribution of confidence values for each class."""
-    plt.figure(figsize=(12, 6))
-    
-    # Get confidence values for each class
-    vortex_conf = y_pred_proba[y_true == 1]
-    non_vortex_conf = y_pred_proba[y_true == 0]
-    
-    # Plot histograms
-    plt.hist(vortex_conf, bins=50, alpha=0.5, label='Vortex', color='red')
-    plt.hist(non_vortex_conf, bins=50, alpha=0.5, label='Non-Vortex', color='blue')
-    
-    plt.title('Distribution of Confidence Values')
-    plt.xlabel('Confidence Value')
-    plt.ylabel('Count')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(save_path)
-    plt.close()
-
-def plot_confidence_timeline(data, y_pred_proba, detection_windows, save_path='confidence_timeline.png'):
-    """Plot confidence values over time with vortex events marked."""
-    plt.figure(figsize=(15, 6))
-    
-    # Create time index
-    time_index = range(len(y_pred_proba))
-    
-    # Plot confidence values
-    plt.plot(time_index, y_pred_proba, label='Confidence', color='blue', alpha=0.7)
-    
-    # Mark detection windows
-    for start, end in detection_windows:
-        plt.axvspan(start, end, color='red', alpha=0.2, label='Detection Window' if start == detection_windows[0][0] else "")
-    
-    plt.title('Confidence Values Over Time')
-    plt.xlabel('Time Index')
-    plt.ylabel('Confidence Value')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(save_path)
-    plt.close()
 
 def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame, feature_set: str = 'shape') -> dict:
     """Evaluate model performance on the full dataset."""
@@ -1307,34 +852,9 @@ def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60, debug: 
     std_vortex = np.std(vortex_patterns, axis=0)
     std_non_vortex = np.std(non_vortex_patterns, axis=0)
     
-    # Plot the patterns
-    plt.figure(figsize=(12, 6))
-    
-    # Plot mean patterns
-    plt.plot(mean_vortex, label='Vortex', color='red')
-    plt.plot(mean_non_vortex, label='Non-Vortex', color='blue')
-    
-    # Plot standard deviation ranges
-    plt.fill_between(range(len(mean_vortex)), 
-                    mean_vortex - std_vortex, 
-                    mean_vortex + std_vortex, 
-                    color='red', alpha=0.2)
-    plt.fill_between(range(len(mean_non_vortex)), 
-                    mean_non_vortex - std_non_vortex, 
-                    mean_non_vortex + std_non_vortex, 
-                    color='blue', alpha=0.2)
-    
-    plt.title('Mean Pressure Patterns Around Vortices vs Non-Vortices')
-    plt.xlabel('Time Steps')
-    plt.ylabel('Pressure (Pa)')
-    plt.legend()
-    plt.grid(True)
-    
-    # Save the plot
+    # Plot the patterns using the plotting module
     results_dir = Path(__file__).parent.parent / 'results'
-    results_dir.mkdir(parents=True, exist_ok=True)
-    plt.savefig(results_dir / 'pressure_patterns.png')
-    plt.close()
+    plot_pressure_patterns(mean_vortex, mean_non_vortex, std_vortex, std_non_vortex, results_dir)
     
     # Print some statistics
     debug_print(debug, "\nPattern Statistics:")
@@ -1479,7 +999,7 @@ def main():
     
     # Analyze learned patterns
     print("\nAnalyzing learned patterns...")
-    model.analyze_learned_patterns(test_data, test_results['y_pred'])
+    # model.analyze_learned_patterns(test_data, test_results['y_pred'])
     
     # Generate test set visualizations
     print("\nGenerating test set visualizations...")
@@ -1524,26 +1044,7 @@ def main():
     
     # Plot training history
     if args.retrain and 'history' in locals():
-        plt.figure(figsize=(12, 4))
-        
-        plt.subplot(1, 2, 1)
-        plt.plot(history.history['loss'], label='Training Loss')
-        plt.plot(history.history['val_loss'], label='Validation Loss')
-        plt.title('Loss over epochs')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.legend()
-        
-        plt.subplot(1, 2, 2)
-        plt.plot(history.history['accuracy'], label='Training Accuracy')
-        plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-        plt.title('Accuracy over epochs')
-        plt.xlabel('Epoch')
-        plt.ylabel('Accuracy')
-        plt.legend()
-        
-        plt.tight_layout()
-        plt.show()
+        plot_training_history(history)
 
     # After test_results = model.evaluate(X_test, y_test)
     gt_windows = find_detection_windows(test_data, debug=False)
@@ -1561,7 +1062,7 @@ def main():
         print("\nModel training and analysis complete!")
 
     # After triggered event evaluation in main()
-    triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
+    # triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
 
     # ... after test_results = model.evaluate(X_test, y_test)
     # Save original predictions for pre-filter analysis
@@ -1576,26 +1077,7 @@ def main():
     failed_patterns = pattern_results['failed_patterns']
 
     # --- Sharpest N-Point Drop Analysis (Separate Chart) ---
-    window_sizes = [2, 3, 5, 10]
-    sharpest_drops_successful = {}
-    sharpest_drops_failed = {}
-    for w in window_sizes:
-        sharpest_drops_successful[w] = [np.min([p[i+w-1] - p[i] for i in range(len(p)-w+1)]) for p in successful_patterns]
-        sharpest_drops_failed[w] = [np.min([p[i+w-1] - p[i] for i in range(len(p)-w+1)]) for p in failed_patterns]
-
-    plt.figure(figsize=(18, 12))
-    for idx, w in enumerate(window_sizes):
-        plt.subplot(2, 2, idx+1)
-        plt.hist(sharpest_drops_successful[w], bins=30, alpha=0.7, label='Successful', color='green', range=(-1, 0.1))
-        plt.hist(sharpest_drops_failed[w], bins=30, alpha=0.7, label='Failed', color='red', range=(-1, 0.1))
-        plt.title(f'Sharpest {w}-Point Drop in Detection Windows')
-        plt.xlabel(f'Max {w}-Point Drop')
-        plt.ylabel('Count')
-        plt.legend()
-        plt.grid(True)
-    plt.tight_layout()
-    plt.savefig('sharpest_n_point_drops.png')
-    plt.close()
+    plot_sharpest_n_point_drops(successful_patterns, failed_patterns)
 
     # --- Sharp Drop Post-Processing Filter (Causal: -window_size to 0) ---
     min_slope_threshold = -0.2  # You can adjust this threshold
@@ -1755,79 +1237,97 @@ def main():
             total_drop_after_initial.append(drop_after_initial)
 
     # Calculate bin ranges for 0.1 width
-    def get_bins(data1, data2, width=0.1):
-        min_val = min(np.min(data1), np.min(data2))
-        max_val = max(np.max(data1), np.max(data2))
-        return np.arange(np.floor(min_val), np.ceil(max_val) + width, width)
+    # def get_bins(data1, data2, width=0.1):
+    #     min_val = min(np.min(data1), np.min(data2))
+    #     max_val = max(np.max(data1), np.max(data2))
+    #     return np.arange(np.floor(min_val), np.ceil(max_val) + width, width)
 
-    # 1. Avg Slope After Sharpest Drop (Next 5 pts)
-    bins1 = get_bins(continued_slope_successful, continued_slope_failed, 0.1)
-    plt.figure(figsize=(8, 6))
-    plt.hist(continued_slope_successful, bins=bins1, alpha=0.7, label='Successful', color='green')
-    plt.hist(continued_slope_failed, bins=bins1, alpha=0.7, label='Failed', color='red')
-    plt.title('Avg Slope After Sharpest Drop (Next 5 pts)')
-    plt.xlabel('Avg Slope')
-    plt.ylabel('Count')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig('continued_drop_avg_slope.png')
-    plt.close()
+    # Plot continued drop analysis using the plotting module
+    plot_continued_drop_analysis(continued_slope_successful, continued_slope_failed,
+                               total_drop_successful, total_drop_failed,
+                               consecutive_neg_successful, consecutive_neg_failed,
+                               drop_after_sharpest_successful, drop_after_sharpest_failed,
+                               total_drop_after_initial_successful, total_drop_after_initial_failed,
+                               lookahead)
 
-    # 2. Total Drop Over Window
-    bins2 = get_bins(total_drop_successful, total_drop_failed, 0.1)
-    plt.figure(figsize=(8, 6))
-    plt.hist(total_drop_successful, bins=bins2, alpha=0.7, label='Successful', color='green')
-    plt.hist(total_drop_failed, bins=bins2, alpha=0.7, label='Failed', color='red')
-    plt.title('Total Drop Over Window')
-    plt.xlabel('Total Drop (last - first)')
-    plt.ylabel('Count')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig('continued_drop_total_drop_window.png')
-    plt.close()
+    # --- Post-processing filters: Only keep detections that pass BOTH filters ---
+    # 1. total drop after initial drop > 0.1
+    # 2. avg slope after sharpest drop < -0.3
+    # These lists are in the same order as y_pred_pre_filter (i.e., for predicted positives)
+    # We'll need to recompute these features for all test windows, not just for plotting
 
-    # 3. Consecutive Negative Slopes After Sharpest Drop
-    plt.figure(figsize=(8, 6))
-    plt.hist(consecutive_neg_successful, bins=range(lookahead+2), alpha=0.7, label='Successful', color='green', align='left')
-    plt.hist(consecutive_neg_failed, bins=range(lookahead+2), alpha=0.7, label='Failed', color='red', align='left')
-    plt.title('Consecutive Negative Slopes After Sharpest Drop')
-    plt.xlabel('Consecutive Negative Slopes')
-    plt.ylabel('Count')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig('continued_drop_consecutive_neg.png')
-    plt.close()
+    # First, recompute features for all test windows (not just successful/failed)
+    avg_slope_after_sharpest = []
+    total_drop_after_initial = []
+    for p in X_test_pressure:
+        diffs = np.diff(p)
+        # Avg slope after sharpest drop
+        sharp_idx = np.argmin(diffs)
+        after = p[sharp_idx+1:sharp_idx+1+lookahead]
+        before = p[sharp_idx]
+        if len(after) > 0:
+            avg_slope = (after[-1] - before) / len(after)
+        else:
+            avg_slope = 0
+        avg_slope_after_sharpest.append(avg_slope)
+        # Total drop after initial drop
+        if np.any(diffs < 0):
+            initial_drop_idx = np.argmax(diffs < 0)
+            drop_after_initial = p[-1] - p[initial_drop_idx]
+        else:
+            drop_after_initial = 0
+        total_drop_after_initial.append(drop_after_initial)
 
-    # 4. Total Drop After Sharpest Drop
-    bins4 = get_bins(drop_after_sharpest_successful, drop_after_sharpest_failed, 0.1)
-    plt.figure(figsize=(8, 6))
-    plt.hist(drop_after_sharpest_successful, bins=bins4, alpha=0.7, label='Successful', color='green')
-    plt.hist(drop_after_sharpest_failed, bins=bins4, alpha=0.7, label='Failed', color='red')
-    plt.title('Total Drop After Sharpest Drop')
-    plt.xlabel('Total Drop (end - sharpest)')
-    plt.ylabel('Count')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig('continued_drop_after_sharpest.png')
-    plt.close()
+    avg_slope_after_sharpest = np.array(avg_slope_after_sharpest)
+    total_drop_after_initial = np.array(total_drop_after_initial)
 
-    # 5. Total Drop After Initial Drop
-    bins5 = get_bins(total_drop_after_initial_successful, total_drop_after_initial_failed, 0.1)
-    plt.figure(figsize=(8, 6))
-    plt.hist(total_drop_after_initial_successful, bins=bins5, alpha=0.7, label='Successful', color='green')
-    plt.hist(total_drop_after_initial_failed, bins=bins5, alpha=0.7, label='Failed', color='red')
-    plt.title('Total Drop After Initial Drop')
-    plt.xlabel('Total Drop (end - initial)')
-    plt.ylabel('Count')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig('continued_drop_after_initial.png')
-    plt.close()
+    print(f"Detections before post-processing filters: {np.sum(y_pred_pre_filter)}")
+
+    # Apply filters
+    y_pred_post_filter = y_pred_pre_filter.copy()
+    # Filter 1: total drop after initial drop > 0.1
+    for i, pred in enumerate(y_pred_post_filter):
+        if pred == 1 and not (total_drop_after_initial[i] < 0.1):
+            y_pred_post_filter[i] = 0
+    print(f"After total drop after initial drop > 0.1: {np.sum(y_pred_post_filter)} detections remain.")
+    # Filter 2: avg slope after sharpest drop > -0.3
+    for i, pred in enumerate(y_pred_post_filter):
+        if pred == 1 and not (avg_slope_after_sharpest[i] > -0.3):
+            y_pred_post_filter[i] = 0
+    print(f"After avg slope after sharpest drop > -0.3: {np.sum(y_pred_post_filter)} detections remain.")
+
+    # --- Post-filter performance analysis ---
+    from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+    precision_post = precision_score(y_test, y_pred_post_filter, zero_division=0)
+    recall_post = recall_score(y_test, y_pred_post_filter, zero_division=0)
+    f1_post = f1_score(y_test, y_pred_post_filter, zero_division=0)
+    tn, fp, fn, tp = confusion_matrix(y_test, y_pred_post_filter, labels=[0,1]).ravel()
+    print("\n--- Performance After Post-Processing Filters ---")
+    print(f"Precision: {precision_post:.4f}")
+    print(f"Recall:    {recall_post:.4f}")
+    print(f"F1-Score:  {f1_post:.4f}")
+    print(f"True Positives:  {tp}")
+    print(f"False Positives: {fp}")
+    print(f"False Negatives: {fn}")
+
+    # --- Combined Sharp Drop + New Filters Post-Processing ---
+    print("\n--- Combined Sharp Drop + New Filters Post-Processing ---")
+    thresholds = {
+        'sharp_drop': -0.35,
+        'total_drop_after_initial': 0.1,
+        'avg_slope_after_sharpest': -0.3
+    }
+    y_pred_combined_filter = feature_engineering.apply_postprocessing_filters(
+        y_pred_pre_filter, X_test_pressure, y_pred_proba_pre_filter, thresholds, lookahead=5
+    )
+    # --- Performance analysis for combined filters ---
+    print("\n--- Performance After Combined Filters ---")
+    compute_classification_metrics(y_test, y_pred_combined_filter)
+
+    # --- Confidence threshold sweep after combined filters ---
+    print("\n--- Confidence Threshold Sweep (After Combined Filters) ---")
+    thresholds_range = np.arange(0.1, 0.91, 0.01)
+    sweep_confidence_thresholds(y_test, y_pred_combined_filter, y_pred_proba_pre_filter, thresholds_range)
 
 if __name__ == "__main__":
     main() 
