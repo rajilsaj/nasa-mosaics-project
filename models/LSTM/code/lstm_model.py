@@ -44,7 +44,7 @@ class VortexLSTMModel:
         """Print debug information if debug flag is set."""
         debug_print(self.debug, *args, **kwargs)
         
-    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True) -> tuple:
+    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, feature_set: str = 'shape') -> tuple:
         """
         Prepare sequences for vortex prediction using local detrending.
         Each window is normalized independently to make features invariant
@@ -55,6 +55,7 @@ class VortexLSTMModel:
             data: Input data
             apply_sampling: If True, creates balanced dataset from vortex events.
                           If False, processes all available data using a sliding window.
+            feature_set: 'shape' for (pressure, acceleration) or 'statistical' for (pressure, skew, kurtosis)
         """
         pressure_values = data['PRESSURE'].values
         gt_detection = data['gt_detection_win'].values
@@ -74,15 +75,17 @@ class VortexLSTMModel:
                 local_mean = np.mean(pressure_window)
                 detrended_pressure = pressure_window - local_mean
                 
-                # 3. Calculate features on the detrended data
-                rolling_mean = pd.Series(detrended_pressure).rolling(window=20, min_periods=1).mean().values
-                rolling_std = pd.Series(detrended_pressure).rolling(window=20, min_periods=1).std().fillna(0).values
-                
-                # 4. Calculate detrended acceleration (second derivative)
-                acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
-                
-                # 5. Assemble the feature sequence (ONLY shape and curvature)
-                sequence = np.stack([detrended_pressure, acceleration], axis=1)
+                # 3. Calculate features based on the chosen set
+                if feature_set == 'shape':
+                    acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
+                    sequence = np.stack([detrended_pressure, acceleration], axis=1)
+                elif feature_set == 'statistical':
+                    rolling_series = pd.Series(detrended_pressure)
+                    skewness = rolling_series.rolling(window=20, min_periods=1).skew().fillna(0).values
+                    kurtosis = rolling_series.rolling(window=20, min_periods=1).kurt().fillna(0).values
+                    sequence = np.stack([detrended_pressure, skewness, kurtosis], axis=1)
+                else:
+                    raise ValueError("feature_set must be 'shape' or 'statistical'")
                 
                 # 6. Determine the label for the window
                 label = 1 if np.any(gt_detection[i-self.window_size:i] == 1) else 0
@@ -104,12 +107,16 @@ class VortexLSTMModel:
                     pressure_window = pressure_values[vortex_idx-self.window_size:vortex_idx].copy()
                     local_mean = np.mean(pressure_window)
                     detrended_pressure = pressure_window - local_mean
-                    rolling_mean = pd.Series(detrended_pressure).rolling(window=20, min_periods=1).mean().values
-                    rolling_std = pd.Series(detrended_pressure).rolling(window=20, min_periods=1).std().fillna(0).values
                     
-                    acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
-                    
-                    sequence = np.stack([detrended_pressure, acceleration], axis=1)
+                    if feature_set == 'shape':
+                        acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
+                        sequence = np.stack([detrended_pressure, acceleration], axis=1)
+                    elif feature_set == 'statistical':
+                        rolling_series = pd.Series(detrended_pressure)
+                        skewness = rolling_series.rolling(window=20, min_periods=1).skew().fillna(0).values
+                        kurtosis = rolling_series.rolling(window=20, min_periods=1).kurt().fillna(0).values
+                        sequence = np.stack([detrended_pressure, skewness, kurtosis], axis=1)
+
                     sequences_list.append(sequence)
                     labels_list.append(1)
 
@@ -123,12 +130,16 @@ class VortexLSTMModel:
                     pressure_window_neg = pressure_values[random_idx-self.window_size:random_idx].copy()
                     local_mean_neg = np.mean(pressure_window_neg)
                     detrended_pressure_neg = pressure_window_neg - local_mean_neg
-                    rolling_mean_neg = pd.Series(detrended_pressure_neg).rolling(window=20, min_periods=1).mean().values
-                    rolling_std_neg = pd.Series(detrended_pressure_neg).rolling(window=20, min_periods=1).std().fillna(0).values
                     
-                    acceleration_neg = np.diff(detrended_pressure_neg, n=2, prepend=[detrended_pressure_neg[0], detrended_pressure_neg[0]])
+                    if feature_set == 'shape':
+                        acceleration_neg = np.diff(detrended_pressure_neg, n=2, prepend=[detrended_pressure_neg[0], detrended_pressure_neg[0]])
+                        sequence_neg = np.stack([detrended_pressure_neg, acceleration_neg], axis=1)
+                    elif feature_set == 'statistical':
+                        rolling_series_neg = pd.Series(detrended_pressure_neg)
+                        skewness_neg = rolling_series_neg.rolling(window=20, min_periods=1).skew().fillna(0).values
+                        kurtosis_neg = rolling_series_neg.rolling(window=20, min_periods=1).kurt().fillna(0).values
+                        sequence_neg = np.stack([detrended_pressure_neg, skewness_neg, kurtosis_neg], axis=1)
 
-                    sequence_neg = np.stack([detrended_pressure_neg, acceleration_neg], axis=1)
                     sequences_list.append(sequence_neg)
                     labels_list.append(0)
 
@@ -260,7 +271,9 @@ class VortexLSTMModel:
         
         # Train model
         self.debug_print("\nTraining vortex prediction model...")
-        self.model = self.build_model((self.window_size, 2), alpha=alpha, gamma=1.5)
+        # The input shape will now depend on the feature set
+        num_features = X_train.shape[2]
+        self.model = self.build_model((self.window_size, num_features), alpha=alpha, gamma=1.5)
         
         # Add learning rate scheduler with adjusted patience
         reduce_lr = ReduceLROnPlateau(
@@ -310,7 +323,9 @@ class VortexLSTMModel:
             raise ValueError(f"Need at least {self.window_size} pressure readings")
             
         current_readings = pressure_readings[-self.window_size:]
-        sequence = current_readings.reshape(1, self.window_size, 2)
+        # Note: This real-time function will need to know which features to build.
+        # This is a simplification for now.
+        sequence = current_readings.reshape(1, self.window_size, current_readings.shape[1])
         return self.model.predict(sequence)[0][0]
     
     def evaluate(self, X_test, y_test):
@@ -967,84 +982,76 @@ class VortexLSTMModel:
         }
 
     def evaluate_triggered_pointwise(self, y_pred, test_data):
-        """Evaluate using hybrid triggered pointwise logic."""
+        """
+        Evaluate using a custom 'latch-on' pointwise logic.
+        Once an event is 'triggered' by a positive prediction, all subsequent points
+        within that true event are counted as True Positives.
+        """
+        # --- Setup ---
         gt_detection = test_data['gt_detection_win'].values
         gt_fwhm = test_data['gt_fwhm'].values
         gt_combined = np.logical_or(gt_detection == 1, gt_fwhm == 1)
         n_samples = len(gt_combined)
         window_size = self.window_size
 
-        # Find all true event windows
-        true_events = []
-        in_event = False
+        # Create a full-length prediction array aligned with the main data array
+        aligned_y_pred = np.zeros(n_samples, dtype=int)
+        # Predictions from the model correspond to the END of a window.
+        # So a prediction at y_pred[i] corresponds to test_data index i + window_size - 1
+        pred_indices = np.arange(len(y_pred)) + window_size -1
+        # Ensure we don't go out of bounds
+        valid_indices = pred_indices < n_samples
+        aligned_y_pred[pred_indices[valid_indices]] = y_pred[valid_indices]
+
+        # 1. Identify all ground truth event windows
+        true_events = self.extract_event_ranges(gt_detection, gt_fwhm)
+
+        # 2. For each true event, find the index of the *first* positive prediction
+        trigger_indices = {}  # Maps event_id -> trigger_index
+        for event_idx, (start, end) in enumerate(true_events):
+            first_trigger = -1
+            # Look for a trigger within the event's span
+            for i in range(start, end + 1):
+                if aligned_y_pred[i] == 1:
+                    first_trigger = i
+                    break  # Found the first one
+            trigger_indices[event_idx] = first_trigger # Will be -1 if not triggered
+
+        # 3. Calculate metrics point-by-point based on the "latch-on" logic
+        tp, fp, fn, tn = 0, 0, 0, 0
+        point_to_event_map = {i: eid for eid, (start, end) in enumerate(true_events) for i in range(start, end + 1)}
+
         for i in range(n_samples):
-            if gt_combined[i] and not in_event:
-                start = i
-                in_event = True
-            elif not gt_combined[i] and in_event:
-                end = i - 1
-                true_events.append((start, end))
-                in_event = False
-        if in_event:
-            true_events.append((start, n_samples - 1))
+            is_gt_positive = gt_combined[i]
 
-        # For each predicted event, expand start index by -window_size (min 0)
-        pred_events = []
-        in_pred = False
-        for i, val in enumerate(y_pred):
-            if val == 1 and not in_pred:
-                start = i
-                in_pred = True
-            elif val == 0 and in_pred:
-                end = i - 1
-                pred_events.append((start, end))
-                in_pred = False
-        if in_pred:
-            pred_events.append((start, len(y_pred) - 1))
-        
-        pred_events_aligned = [(max(0, start - window_size), end) for (start, end) in pred_events]
+            if is_gt_positive:
+                event_id = point_to_event_map[i]
+                trigger_idx = trigger_indices[event_id]
 
-        # Track which true events have been triggered
-        triggered_events = set()
-        for p_start, p_end in pred_events_aligned:
-            for t_idx, (t_start, t_end) in enumerate(true_events):
-                if p_end >= t_start and p_start <= t_end:
-                    triggered_events.add(t_idx)
-
-        # Now evaluate pointwise with triggered logic
-        tp = 0  # True positives
-        fp = 0  # False positives
-        tn = 0  # True negatives
-        fn = 0  # False negatives
-
-        for i in range(len(y_pred)):
-            # Check if this prediction index is within any triggered event
-            in_triggered_event = False
-            for t_idx in triggered_events:
-                t_start, t_end = true_events[t_idx]
-                # Adjust for window alignment
-                pred_idx = i + window_size
-                if t_start <= pred_idx <= t_end:
-                    in_triggered_event = True
-                    break
-
-            if y_pred[i] == 1:  # Model predicted positive
-                if in_triggered_event:
-                    tp += 1  # True positive (either correct or within triggered event)
+                if trigger_idx == -1:
+                    # The event was never triggered, so this point is a False Negative
+                    fn += 1
                 else:
-                    fp += 1  # False positive (outside any true event)
-            else:  # Model predicted negative
-                if in_triggered_event:
-                    tp += 1  # Still true positive (within triggered event)
+                    # The event was triggered at some point
+                    if i < trigger_idx:
+                        # This point is before the first trigger, so it's a miss
+                        fn += 1
+                    else:
+                        # This point is at or after the trigger, count as a True Positive
+                        tp += 1
+            else:
+                # This is a non-vortex point
+                if aligned_y_pred[i] == 1:
+                    fp += 1
                 else:
-                    tn += 1  # True negative (correctly predicted negative outside events)
-
-        # Calculate metrics
+                    tn += 1
+                    
+        # --- Final Metrics Calculation ---
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0
         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
 
-        print("\nTriggered Pointwise Evaluation:")
+        print("\nTriggered Pointwise Evaluation (Corrected 'Latch-on' Logic):")
         print(f"Triggered Pointwise Precision: {precision:.4f}")
         print(f"Triggered Pointwise Recall: {recall:.4f}")
         print(f"Triggered Pointwise F1-Score: {f1:.4f}")
@@ -1052,7 +1059,6 @@ class VortexLSTMModel:
         print(f"Triggered Pointwise False Positives: {fp}")
         print(f"Triggered Pointwise True Negatives: {tn}")
         print(f"Triggered Pointwise False Negatives: {fn}")
-        print(f"Number of triggered events: {len(triggered_events)}")
         return {
             'precision': precision,
             'recall': recall,
@@ -1060,8 +1066,7 @@ class VortexLSTMModel:
             'tp': tp,
             'fp': fp,
             'tn': tn,
-            'fn': fn,
-            'n_triggered_events': len(triggered_events)
+            'fn': fn
         }
 
 def find_detection_windows(data: pd.DataFrame, debug: bool = False) -> list:
@@ -1165,10 +1170,10 @@ def plot_confidence_timeline(data, y_pred_proba, detection_windows, save_path='c
     plt.savefig(save_path)
     plt.close()
 
-def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame) -> dict:
+def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame, feature_set: str = 'shape') -> dict:
     """Evaluate model performance on the full dataset."""
     debug_print(model.debug, "\nPreparing sequences from full dataset (no sampling)...")
-    X_full, y_full = model.prepare_sequences(data, apply_sampling=False)
+    X_full, y_full = model.prepare_sequences(data, apply_sampling=False, feature_set=feature_set)
     
     debug_print(model.debug, "Making predictions on full dataset...")
     y_pred_proba = model.predict(X_full)
@@ -1290,6 +1295,8 @@ def main():
     parser.add_argument('--full_eval', action='store_true', help='Run evaluation on full dataset')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     parser.add_argument('--window_size', type=int, default=30, help='Size of the input window for the LSTM.')
+    parser.add_argument('--model_name', type=str, default='lstm_model.h5', help='Name for the saved model file.')
+    parser.add_argument('--feature_set', type=str, default='shape', help="Feature set to use: 'shape' or 'statistical'")
     args = parser.parse_args()
     
     print("Starting LSTM model training...")
@@ -1349,14 +1356,14 @@ def main():
     model = VortexLSTMModel(window_size=args.window_size, debug=args.debug)
     
     # Prepare sequences for each split
-    print("\nPreparing training sequences...")
-    X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True)
+    print(f"\nPreparing training sequences with '{args.feature_set}' features...")
+    X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True, feature_set=args.feature_set)
     
-    print("\nPreparing validation sequences...")
-    X_val, y_val = model.prepare_sequences(val_data, apply_sampling=True)
+    print(f"\nPreparing validation sequences with '{args.feature_set}' features...")
+    X_val, y_val = model.prepare_sequences(val_data, apply_sampling=True, feature_set=args.feature_set)
     
-    print("\nPreparing test sequences...")
-    X_test, y_test = model.prepare_sequences(test_data, apply_sampling=False)
+    print(f"\nPreparing test sequences with '{args.feature_set}' features...")
+    X_test, y_test = model.prepare_sequences(test_data, apply_sampling=False, feature_set=args.feature_set)
     
     # Print class distribution
     print("\nClass distribution in sets:")
@@ -1365,7 +1372,7 @@ def main():
     print(f"Test - Vortex: {sum(y_test)}, Non-vortex: {len(y_test) - sum(y_test)}")
     
     # Model path
-    model_path = Path(__file__).parent.parent / 'models' / 'lstm_model.h5'
+    model_path = Path(__file__).parent.parent / 'models' / args.model_name
     
     # Train or load model
     if model_path.exists() and not args.retrain:
@@ -1436,7 +1443,7 @@ def main():
     # Full dataset evaluation (optional)
     if args.full_eval:
         print("\nEvaluating model on full dataset...")
-        full_results = evaluate_on_full_dataset(model, data)
+        full_results = evaluate_on_full_dataset(model, data, args.feature_set)
         
         print("\nFull Dataset Performance:")
         print(f"Precision: {full_results['standard']['precision']:.4f}")
