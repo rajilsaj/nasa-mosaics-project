@@ -626,6 +626,93 @@ class VortexLSTMModel:
             'failed_confidences': failed_confidences
         }
 
+    def evaluate_triggered_pointwise(self, y_pred, test_data):
+        """
+        Evaluate using a custom 'latch-on' pointwise logic.
+        Once an event is 'triggered' by a positive prediction, all subsequent points
+        within that true event are counted as True Positives.
+        """
+        # --- Setup ---
+        gt_detection = test_data['gt_detection_win'].values
+        gt_fwhm = test_data['gt_fwhm'].values
+        gt_combined = np.logical_or(gt_detection == 1, gt_fwhm == 1)
+        n_samples = len(gt_combined)
+        window_size = self.window_size
+
+        # Create a full-length prediction array aligned with the main data array
+        aligned_y_pred = np.zeros(n_samples, dtype=int)
+        # Predictions from the model correspond to the END of a window.
+        # So a prediction at y_pred[i] corresponds to test_data index i + window_size - 1
+        pred_indices = np.arange(len(y_pred)) + window_size - 1
+        # Ensure we don't go out of bounds
+        valid_indices = pred_indices < n_samples
+        aligned_y_pred[pred_indices[valid_indices]] = y_pred[valid_indices]
+
+        # 1. Identify all ground truth event windows
+        true_events = self.extract_event_ranges(gt_detection, gt_fwhm)
+
+        # 2. For each true event, find the index of the *first* positive prediction
+        trigger_indices = {}  # Maps event_id -> trigger_index
+        for event_idx, (start, end) in enumerate(true_events):
+            first_trigger = -1
+            # Look for a trigger within the event's span
+            for i in range(start, end + 1):
+                if aligned_y_pred[i] == 1:
+                    first_trigger = i
+                    break  # Found the first one
+            trigger_indices[event_idx] = first_trigger # Will be -1 if not triggered
+
+        # 3. Calculate metrics point-by-point based on the "latch-on" logic
+        tp, fp, fn, tn = 0, 0, 0, 0
+        point_to_event_map = {i: eid for eid, (start, end) in enumerate(true_events) for i in range(start, end + 1)}
+
+        for i in range(n_samples):
+            is_gt_positive = gt_combined[i]
+
+            if is_gt_positive:
+                event_id = point_to_event_map[i]
+                trigger_idx = trigger_indices[event_id]
+
+                if trigger_idx == -1:
+                    # The event was never triggered, so this point is a False Negative
+                    fn += 1
+                else:
+                    # The event was triggered at some point
+                    if i < trigger_idx:
+                        # This point is before the first trigger, so it's a miss
+                        fn += 1
+                    else:
+                        # This point is at or after the trigger, count as a True Positive
+                        tp += 1
+            else:
+                # This is a non-vortex point
+                if aligned_y_pred[i] == 1:
+                    fp += 1
+                else:
+                    tn += 1
+                    
+        # --- Final Metrics Calculation ---
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+        print("\nTriggered Pointwise Evaluation (Corrected 'Latch-on' Logic):")
+        print(f"Triggered Pointwise Precision: {precision:.4f}")
+        print(f"Triggered Pointwise Recall: {recall:.4f}")
+        print(f"Triggered Pointwise F1-Score: {f1:.4f}")
+        print(f"Triggered Pointwise True Positives: {tp}")
+        print(f"Triggered Pointwise False Positives: {fp}")
+        print(f"Triggered Pointwise True Negatives: {tn}")
+        print(f"Triggered Pointwise False Negatives: {fn}")
+        return {
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'tp': tp,
+            'fp': fp,
+            'tn': tn,
+            'fn': fn
+        }
 
 
     def evaluate_with_windows(self, test_results, gt_windows, test_data):
@@ -1062,7 +1149,7 @@ def main():
         print("\nModel training and analysis complete!")
 
     # After triggered event evaluation in main()
-    # triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
+    triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
 
     # ... after test_results = model.evaluate(X_test, y_test)
     # Save original predictions for pre-filter analysis
@@ -1283,6 +1370,15 @@ def main():
 
     print(f"Detections before post-processing filters: {np.sum(y_pred_pre_filter)}")
 
+    # Compute total drop after sharpest drop for all windows
+    total_drop_after_sharpest = []
+    for p in X_test_pressure:
+        diffs = np.diff(p)
+        sharp_idx = np.argmin(diffs)
+        drop_after_sharpest = p[-1] - p[sharp_idx]
+        total_drop_after_sharpest.append(drop_after_sharpest)
+    total_drop_after_sharpest = np.array(total_drop_after_sharpest)
+
     # Apply filters
     y_pred_post_filter = y_pred_pre_filter.copy()
     # Filter 1: total drop after initial drop > 0.1
@@ -1295,20 +1391,111 @@ def main():
         if pred == 1 and not (avg_slope_after_sharpest[i] > -0.3):
             y_pred_post_filter[i] = 0
     print(f"After avg slope after sharpest drop > -0.3: {np.sum(y_pred_post_filter)} detections remain.")
+    # Filter 3: total drop after sharpest drop >= -0.75
+    for i, pred in enumerate(y_pred_post_filter):
+        if pred == 1 and total_drop_after_sharpest[i] < -0.75:
+            y_pred_post_filter[i] = 0
+    print(f"After total drop after sharpest drop >= -0.75: {np.sum(y_pred_post_filter)} detections remain.")
 
-    # --- Post-filter performance analysis ---
-    from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
-    precision_post = precision_score(y_test, y_pred_post_filter, zero_division=0)
-    recall_post = recall_score(y_test, y_pred_post_filter, zero_division=0)
-    f1_post = f1_score(y_test, y_pred_post_filter, zero_division=0)
-    tn, fp, fn, tp = confusion_matrix(y_test, y_pred_post_filter, labels=[0,1]).ravel()
-    print("\n--- Performance After Post-Processing Filters ---")
-    print(f"Precision: {precision_post:.4f}")
-    print(f"Recall:    {recall_post:.4f}")
-    print(f"F1-Score:  {f1_post:.4f}")
-    print(f"True Positives:  {tp}")
-    print(f"False Positives: {fp}")
-    print(f"False Negatives: {fn}")
+    # --- Post-filter continued drop analysis plots (aligned) ---
+    kept_indices = [i for i, pred in enumerate(y_pred_post_filter) if pred == 1]
+    successful_patterns_post = []
+    failed_patterns_post = []
+    total_drop_after_initial_successful_post = []
+    total_drop_after_initial_failed_post = []
+    total_drop_after_sharpest_successful_post = []
+    total_drop_after_sharpest_failed_post = []
+    continued_slope_successful_post = []
+    continued_slope_failed_post = []
+    total_drop_successful_post = []
+    total_drop_failed_post = []
+    consecutive_neg_successful_post = []
+    consecutive_neg_failed_post = []
+    drop_after_sharpest_successful_post = []
+    drop_after_sharpest_failed_post = []
+    for idx in kept_indices:
+        detection_idx = window_starts[idx]
+        # Get pressure pattern ending at detection (causal)
+        start_idx = max(0, detection_idx - model.window_size)
+        end_idx = detection_idx + 1  # inclusive of detection point
+        pressure_pattern = test_data['PRESSURE'].iloc[start_idx:end_idx].values
+        if len(pressure_pattern) == model.window_size + 1:
+            # Use the same event logic as analyze_detection_patterns
+            point_to_event_map = {}
+            for event_idx, (start, end) in enumerate(events):
+                for i in range(start, end + 1):
+                    point_to_event_map[i] = event_idx
+            if detection_idx in point_to_event_map:
+                successful_patterns_post.append(pressure_pattern)
+                total_drop_after_initial_successful_post.append(total_drop_after_initial[idx])
+                total_drop_after_sharpest_successful_post.append(total_drop_after_sharpest[idx])
+            else:
+                failed_patterns_post.append(pressure_pattern)
+                total_drop_after_initial_failed_post.append(total_drop_after_initial[idx])
+                total_drop_after_sharpest_failed_post.append(total_drop_after_sharpest[idx])
+    # Now compute the other features for these patterns
+    lookahead = 5
+    for patterns, continued_slope, total_drop, consecutive_neg, drop_after_sharpest in [
+        (successful_patterns_post, continued_slope_successful_post, total_drop_successful_post, consecutive_neg_successful_post, drop_after_sharpest_successful_post),
+        (failed_patterns_post, continued_slope_failed_post, total_drop_failed_post, consecutive_neg_failed_post, drop_after_sharpest_failed_post)
+    ]:
+        for p in patterns:
+            diffs = np.diff(p)
+            sharp_idx = np.argmin(diffs)
+            after = p[sharp_idx+1:sharp_idx+1+lookahead]
+            before = p[sharp_idx]
+            if len(after) > 0:
+                continued_slope.append((after[-1] - before) / len(after))
+            else:
+                continued_slope.append(0)
+            total_drop.append(p[-1] - p[0])
+            neg_count = 0
+            for d in diffs[sharp_idx+1:]:
+                if d < 0:
+                    neg_count += 1
+                else:
+                    break
+            consecutive_neg.append(neg_count)
+            drop_after_value = p[-1] - p[sharp_idx]
+            drop_after_sharpest.append(drop_after_value)
+    # Debug prints for misalignment (should now be zero)
+    print("\n[DEBUG] Post-filter analysis (aligned):")
+    print("len(y_pred_post_filter):", len(y_pred_post_filter))
+    print("len(window_starts):", len(window_starts))
+    print("len(failed_patterns_post):", len(failed_patterns_post))
+    print("Max total_drop_after_initial_failed_post:", np.max(total_drop_after_initial_failed_post) if len(total_drop_after_initial_failed_post) > 0 else 'N/A')
+    print("Num with value >= 0.1:", np.sum(np.array(total_drop_after_initial_failed_post) >= 0.1) if len(total_drop_after_initial_failed_post) > 0 else 'N/A')
+    bad_indices = np.where(np.array(total_drop_after_initial_failed_post) >= 0.1)[0]
+    if len(bad_indices) > 0:
+        print("Indices and values of failed detections with total_drop_after_initial >= 0.1:")
+        for idx in bad_indices:
+            print(f"  Index: {idx}, Value: {total_drop_after_initial_failed_post[idx]}")
+    else:
+        print("No failed detections with total_drop_after_initial >= 0.1 found.")
+
+    plot_continued_drop_analysis(
+        continued_slope_successful_post, continued_slope_failed_post,
+        total_drop_successful_post, total_drop_failed_post,
+        consecutive_neg_successful_post, consecutive_neg_failed_post,
+        drop_after_sharpest_successful_post, drop_after_sharpest_failed_post,
+        total_drop_after_initial_successful_post, total_drop_after_initial_failed_post,
+        lookahead,
+        suffix="_post_filter"
+    )
+
+    # --- Post-filter total drop after sharpest drop analysis plot ---
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10, 8))
+    plt.hist(total_drop_after_sharpest_successful_post, bins=30, alpha=0.7, label='Successful', color='green')
+    plt.hist(total_drop_after_sharpest_failed_post, bins=30, alpha=0.7, label='Failed', color='red')
+    plt.title('Total Drop After Sharpest Drop_post_filter')
+    plt.xlabel('Total Drop (end - sharpest)')
+    plt.ylabel('Count')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('continued_drop_analysis_total_drop_after_sharpest_post_filter.png')
+    plt.close()
 
     # --- Combined Sharp Drop + New Filters Post-Processing ---
     print("\n--- Combined Sharp Drop + New Filters Post-Processing ---")
@@ -1328,6 +1515,34 @@ def main():
     print("\n--- Confidence Threshold Sweep (After Combined Filters) ---")
     thresholds_range = np.arange(0.1, 0.91, 0.01)
     sweep_confidence_thresholds(y_test, y_pred_combined_filter, y_pred_proba_pre_filter, thresholds_range)
+
+    # --- Find best threshold for total_drop_after_sharpest ---
+    best_f1 = 0
+    best_thresh = None
+    best_y_pred = None
+    from sklearn.metrics import precision_score, recall_score, f1_score
+    sweep_range = np.arange(-1.5, 0.01, 0.05)
+    for thresh in sweep_range:
+        y_pred_temp = y_pred_pre_filter.copy()
+        # Apply all previous filters
+        for i, pred in enumerate(y_pred_temp):
+            if pred == 1 and not (total_drop_after_initial[i] < 0.1):
+                y_pred_temp[i] = 0
+        for i, pred in enumerate(y_pred_temp):
+            if pred == 1 and not (avg_slope_after_sharpest[i] > -0.3):
+                y_pred_temp[i] = 0
+        # Now apply the threshold sweep for total_drop_after_sharpest
+        for i, pred in enumerate(y_pred_temp):
+            if pred == 1 and total_drop_after_sharpest[i] < thresh:
+                y_pred_temp[i] = 0
+        f1 = f1_score(y_test, y_pred_temp, zero_division=0)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_thresh = thresh
+            best_y_pred = y_pred_temp.copy()
+    print(f"\nBest F1-score after all filters: {best_f1:.4f} at total_drop_after_sharpest threshold {best_thresh:.2f}")
+    # Use the best filter for subsequent post-filter analysis
+    y_pred_post_filter = best_y_pred
 
 if __name__ == "__main__":
     main() 

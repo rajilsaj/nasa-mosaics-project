@@ -223,12 +223,15 @@ def plot_training_history(history):
     plt.tight_layout()
     plt.show()
 
-def plot_continued_drop_analysis(continued_slope_successful, continued_slope_failed,
-                               total_drop_successful, total_drop_failed,
-                               consecutive_neg_successful, consecutive_neg_failed,
-                               drop_after_sharpest_successful, drop_after_sharpest_failed,
-                               total_drop_after_initial_successful, total_drop_after_initial_failed,
-                               lookahead):
+def plot_continued_drop_analysis(
+    continued_slope_successful, continued_slope_failed,
+    total_drop_successful, total_drop_failed,
+    consecutive_neg_successful, consecutive_neg_failed,
+    drop_after_sharpest_successful, drop_after_sharpest_failed,
+    total_drop_after_initial_successful, total_drop_after_initial_failed,
+    lookahead,
+    suffix=""
+):
     """Plot continued drop analysis."""
     # 1. Avg Slope After Sharpest Drop (Next 5 pts)
     plt.figure(figsize=(8, 6))
@@ -286,14 +289,30 @@ def plot_continued_drop_analysis(continued_slope_successful, continued_slope_fai
     plt.figure(figsize=(8, 6))
     plt.hist(total_drop_after_initial_successful, bins=30, alpha=0.7, label='Successful', color='green')
     plt.hist(total_drop_after_initial_failed, bins=30, alpha=0.7, label='Failed', color='red')
-    plt.title('Total Drop After Initial Drop')
+    plt.title('Total Drop After Initial Drop' + suffix)
     plt.xlabel('Total Drop (end - initial)')
     plt.ylabel('Count')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig('continued_drop_after_initial.png')
+    plt.savefig(f'continued_drop_analysis_total_drop_after_initial{suffix}.png')
     plt.close()
+
+    # You can add more plots for other features as needed, e.g. continued_slope, drop_after_sharpest, etc.
+    # Example for continued_slope:
+    plt.figure(figsize=(10, 8))
+    plt.hist(continued_slope_successful, bins=30, alpha=0.7, label='Successful', color='green')
+    plt.hist(continued_slope_failed, bins=30, alpha=0.7, label='Failed', color='red')
+    plt.title('Continued Slope After Sharpest Drop' + suffix)
+    plt.xlabel(f'Avg Slope (next {lookahead} points)')
+    plt.ylabel('Count')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f'continued_drop_analysis_continued_slope{suffix}.png')
+    plt.close()
+
+    # Add more plots as needed for your analysis
 
 def plot_sharpest_n_point_drops(successful_patterns, failed_patterns):
     """Plot sharpest N-point drop analysis."""
