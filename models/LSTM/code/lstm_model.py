@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import sys
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
@@ -16,6 +15,7 @@ import joblib
 import tensorflow.keras.backend as K
 from tensorflow.keras.regularizers import l2
 import gc
+import numpy as np
 print("Using GPU:", tf.config.list_physical_devices('GPU'))
 mixed_precision.set_global_policy("mixed_float16")
 
@@ -474,26 +474,26 @@ class VortexLSTMModel:
         successful_sclks = []
         failed_sclks = []
         
-        window_size = 60  # Look at 60 points before and after detection
-        
+        window_size = 60  # or model.window_size if available
         for i, prediction in enumerate(y_pred):
             if prediction == 1:  # Positive prediction
                 detection_idx = window_starts[i]
                 detection_sclk = test_data['SCLK'].iloc[detection_idx]
-                
-                # Get pressure pattern around this detection
+                # Get pressure pattern ending at detection (causal)
                 start_idx = max(0, detection_idx - window_size)
-                end_idx = min(len(test_data), detection_idx + window_size + 1)
+                end_idx = detection_idx + 1  # inclusive of detection point
                 pressure_pattern = test_data['PRESSURE'].iloc[start_idx:end_idx].values
-                
-                if detection_idx in point_to_event_map:
-                    # Successful detection
-                    successful_patterns.append(pressure_pattern)
-                    successful_sclks.append(detection_sclk)
-                else:
-                    # False alarm
-                    failed_patterns.append(pressure_pattern)
-                    failed_sclks.append(detection_sclk)
+                if len(pressure_pattern) == window_size + 1:
+                    if detection_idx in point_to_event_map:
+                        successful_patterns.append(pressure_pattern)
+                        successful_sclks.append(detection_sclk)
+                    else:
+                        failed_patterns.append(pressure_pattern)
+                        failed_sclks.append(detection_sclk)
+        # Update time_points for plotting to np.arange(-window_size, 1)
+        time_points = np.arange(-window_size, 1)
+        # All subsequent pattern analysis, continued drop analysis, and plots should use these causal patterns and time_points.
+        # In continued drop analysis, use only these causal patterns as well.
         
         # Convert to arrays
         successful_patterns = np.array(successful_patterns)
@@ -547,7 +547,6 @@ class VortexLSTMModel:
 
             # 1. Mean patterns
             plt.subplot(3, 3, 1)
-            time_points = np.arange(-window_size, window_size + 1)
             plt.plot(time_points, mean_successful, label='Successful Detections', color='green', linewidth=2)
             plt.plot(time_points, mean_failed, label='False Alarms', color='red', linewidth=2)
             plt.fill_between(time_points, mean_successful - std_successful, mean_successful + std_successful, color='green', alpha=0.2)
@@ -1564,6 +1563,18 @@ def main():
     # After triggered event evaluation in main()
     triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
 
+    # ... after test_results = model.evaluate(X_test, y_test)
+    # Save original predictions for pre-filter analysis
+    y_pred_pre_filter = test_results['y_pred'].copy()
+    y_pred_proba_pre_filter = test_results['y_pred_proba'].copy()
+
+    # Prepare for sharpest N-point drop analysis using correct detection patterns
+    window_starts = np.arange(model.window_size, len(test_data))
+    events = model.extract_event_ranges(test_data['gt_detection_win'].values, test_data['gt_fwhm'].values)
+    pattern_results = model.analyze_detection_patterns(test_results['y_pred'], window_starts, events, test_data)
+    successful_patterns = pattern_results['successful_patterns']
+    failed_patterns = pattern_results['failed_patterns']
+
     # --- Sharpest N-Point Drop Analysis (Separate Chart) ---
     window_sizes = [2, 3, 5, 10]
     sharpest_drops_successful = {}
@@ -1586,41 +1597,237 @@ def main():
     plt.savefig('sharpest_n_point_drops.png')
     plt.close()
 
-    # ... after test_results = model.evaluate(X_test, y_test)
-    # Save original predictions for pre-filter analysis
-    y_pred_pre_filter = test_results['y_pred'].copy()
-    y_pred_proba_pre_filter = test_results['y_pred_proba'].copy()
-
-    # Prepare for sharpest N-point drop analysis using correct detection patterns
-    window_starts = np.arange(model.window_size, len(test_data))
-    events = model.extract_event_ranges(test_data['gt_detection_win'].values, test_data['gt_fwhm'].values)
-    pattern_results = model.analyze_detection_patterns(test_results['y_pred'], window_starts, events, test_data)
-    successful_patterns = pattern_results['successful_patterns']
-    failed_patterns = pattern_results['failed_patterns']
-
-    # --- Sharp Drop Post-Processing Filter ---
-    # Use sharpest 2-point drop (min diff) as filter
-    min_slope_threshold = -0.3  # You can adjust this threshold
+    # --- Sharp Drop Post-Processing Filter (Causal: -window_size to 0) ---
+    min_slope_threshold = -0.2  # You can adjust this threshold
     X_test_pressure = X_test[:, :, 0]  # Assuming pressure is the first feature
     y_pred_post_filter = y_pred_pre_filter.copy()
     for i, pred in enumerate(y_pred_pre_filter):
         if pred == 1:
-            pressure_window = X_test_pressure[i]
+            # Only use the window up to the detection point (causal)
+            pressure_window = X_test_pressure[i]  # This is already -window_size:0 relative to detection
             min_slope = np.min(np.diff(pressure_window))
             if min_slope < min_slope_threshold:
                 y_pred_post_filter[i] = 0
+
+    # (If you want to add continued drop or other causal features, do so here using only pressure_window)
 
     # --- Confidence Analysis Pre- and Post-Filtering ---
     # Pre-filter confidence analysis
     model.analyze_confidence_distribution(y_pred_pre_filter, y_pred_proba_pre_filter, window_starts, events, test_data)
     import os
     if os.path.exists('confidence_analysis.png'):
+        if os.path.exists('confidence_analysis_pre_filter.png'):
+            os.remove('confidence_analysis_pre_filter.png')
         os.rename('confidence_analysis.png', 'confidence_analysis_pre_filter.png')
 
     # Post-filter confidence analysis
     model.analyze_confidence_distribution(y_pred_post_filter, y_pred_proba_pre_filter, window_starts, events, test_data)
     if os.path.exists('confidence_analysis.png'):
+        if os.path.exists('confidence_analysis_post_filter.png'):
+            os.remove('confidence_analysis_post_filter.png')
         os.rename('confidence_analysis.png', 'confidence_analysis_post_filter.png')
+
+    # --- Quantify performance change ---
+    from sklearn.metrics import precision_score, recall_score, f1_score
+    print("\n--- Performance Before Sharp Drop Filtering ---")
+    precision_pre = precision_score(y_test, y_pred_pre_filter, zero_division=0)
+    recall_pre = recall_score(y_test, y_pred_pre_filter, zero_division=0)
+    f1_pre = f1_score(y_test, y_pred_pre_filter, zero_division=0)
+    print(f"Precision: {precision_pre:.4f}")
+    print(f"Recall:    {recall_pre:.4f}")
+    print(f"F1-Score:  {f1_pre:.4f}")
+
+    print("\n--- Performance After Sharp Drop Filtering ---")
+    precision_post = precision_score(y_test, y_pred_post_filter, zero_division=0)
+    recall_post = recall_score(y_test, y_pred_post_filter, zero_division=0)
+    f1_post = f1_score(y_test, y_pred_post_filter, zero_division=0)
+    print(f"Precision: {precision_post:.4f}")
+    print(f"Recall:    {recall_post:.4f}")
+    print(f"F1-Score:  {f1_post:.4f}")
+
+    # --- Sweep through multiple sharp drop thresholds ---
+    thresholds = [-0.4, -0.35, -0.3, -0.25, -0.2]
+    print("\n--- Sharp Drop Threshold Sweep ---")
+    for thresh in thresholds:
+        y_pred_thresh = y_pred_pre_filter.copy()
+        for i, pred in enumerate(y_pred_pre_filter):
+            if pred == 1:
+                pressure_window = X_test_pressure[i]
+                min_slope = np.min(np.diff(pressure_window))
+                if min_slope < thresh:
+                    y_pred_thresh[i] = 0
+        precision = precision_score(y_test, y_pred_thresh, zero_division=0)
+        recall = recall_score(y_test, y_pred_thresh, zero_division=0)
+        f1 = f1_score(y_test, y_pred_thresh, zero_division=0)
+        print(f"Threshold: {thresh:5.2f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1-Score: {f1:.4f}")
+
+    # --- Confidence threshold sweep (pre- and post-sharp drop filtering) ---
+    conf_thresholds = np.arange(0.60, 0.75, 0.01)
+
+    print("\n--- Confidence Threshold Sweep (Pre-Sharp Drop Filtering) ---")
+    best_f1_pre = 0
+    best_thresh_pre = 0
+    for conf_thresh in conf_thresholds:
+        y_pred_conf = y_pred_pre_filter.copy()
+        for i, pred in enumerate(y_pred_pre_filter):
+            if pred == 1 and y_pred_proba_pre_filter[i] < conf_thresh:
+                y_pred_conf[i] = 0
+        precision = precision_score(y_test, y_pred_conf, zero_division=0)
+        recall = recall_score(y_test, y_pred_conf, zero_division=0)
+        f1 = f1_score(y_test, y_pred_conf, zero_division=0)
+        print(f"Conf Thresh: {conf_thresh:.2f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1-Score: {f1:.4f}")
+        if f1 > best_f1_pre:
+            best_f1_pre = f1
+            best_thresh_pre = conf_thresh
+    print(f"\nBest F1-Score (Pre-Sharp Drop): {best_f1_pre:.4f} at confidence threshold {best_thresh_pre:.2f}")
+
+    print("\n--- Confidence Threshold Sweep (Post-Sharp Drop Filtering, -0.35) ---")
+    best_f1_post = 0
+    best_thresh_post = 0
+    # Apply sharp drop filter at -0.35 first
+    y_pred_sharp = y_pred_pre_filter.copy()
+    for i, pred in enumerate(y_pred_pre_filter):
+        if pred == 1:
+            pressure_window = X_test_pressure[i]
+            min_slope = np.min(np.diff(pressure_window))
+            if min_slope < -0.35:
+                y_pred_sharp[i] = 0
+    for conf_thresh in conf_thresholds:
+        y_pred_conf = y_pred_sharp.copy()
+        for i, pred in enumerate(y_pred_sharp):
+            if pred == 1 and y_pred_proba_pre_filter[i] < conf_thresh:
+                y_pred_conf[i] = 0
+        precision = precision_score(y_test, y_pred_conf, zero_division=0)
+        recall = recall_score(y_test, y_pred_conf, zero_division=0)
+        f1 = f1_score(y_test, y_pred_conf, zero_division=0)
+        print(f"Conf Thresh: {conf_thresh:.2f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1-Score: {f1:.4f}")
+        if f1 > best_f1_post:
+            best_f1_post = f1
+            best_thresh_post = conf_thresh
+    print(f"\nBest F1-Score (Post-Sharp Drop): {best_f1_post:.4f} at confidence threshold {best_thresh_post:.2f}")
+
+    # --- Continued Drop Analysis (Sharp Drop Artifact Detection) ---
+    continued_slope_successful = []
+    continued_slope_failed = []
+    total_drop_successful = []
+    total_drop_failed = []
+    consecutive_neg_successful = []
+    consecutive_neg_failed = []
+    drop_after_sharpest_successful = []
+    drop_after_sharpest_failed = []
+    lookahead = 5
+    total_drop_after_initial_successful = []
+    total_drop_after_initial_failed = []
+    # Existing feature extraction loop
+    for patterns, continued_slope, total_drop, consecutive_neg, drop_after_sharpest, total_drop_after_initial in [
+        (successful_patterns, continued_slope_successful, total_drop_successful, consecutive_neg_successful, drop_after_sharpest_successful, total_drop_after_initial_successful),
+        (failed_patterns, continued_slope_failed, total_drop_failed, consecutive_neg_failed, drop_after_sharpest_failed, total_drop_after_initial_failed)
+    ]:
+        for p in patterns:
+            diffs = np.diff(p)
+            sharp_idx = np.argmin(diffs)
+            # 1. Slope after sharpest drop
+            after = p[sharp_idx+1:sharp_idx+1+lookahead]
+            before = p[sharp_idx]
+            if len(after) > 0:
+                continued_slope.append((after[-1] - before) / len(after))
+            else:
+                continued_slope.append(0)
+            # 2. Total drop over window
+            total_drop.append(p[-1] - p[0])
+            # 3. Number of consecutive negative slopes after sharpest drop
+            neg_count = 0
+            for d in diffs[sharp_idx+1:]:
+                if d < 0:
+                    neg_count += 1
+                else:
+                    break
+            consecutive_neg.append(neg_count)
+            # 4. Total drop after sharpest drop
+            drop_after_value = p[-1] - p[sharp_idx]
+            drop_after_sharpest.append(drop_after_value)
+            # 5. Total drop after initial drop
+            if np.any(diffs < 0):
+                initial_drop_idx = np.argmax(diffs < 0)
+                drop_after_initial = p[-1] - p[initial_drop_idx]
+            else:
+                drop_after_initial = 0
+            total_drop_after_initial.append(drop_after_initial)
+
+    # Calculate bin ranges for 0.1 width
+    def get_bins(data1, data2, width=0.1):
+        min_val = min(np.min(data1), np.min(data2))
+        max_val = max(np.max(data1), np.max(data2))
+        return np.arange(np.floor(min_val), np.ceil(max_val) + width, width)
+
+    # 1. Avg Slope After Sharpest Drop (Next 5 pts)
+    bins1 = get_bins(continued_slope_successful, continued_slope_failed, 0.1)
+    plt.figure(figsize=(8, 6))
+    plt.hist(continued_slope_successful, bins=bins1, alpha=0.7, label='Successful', color='green')
+    plt.hist(continued_slope_failed, bins=bins1, alpha=0.7, label='Failed', color='red')
+    plt.title('Avg Slope After Sharpest Drop (Next 5 pts)')
+    plt.xlabel('Avg Slope')
+    plt.ylabel('Count')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('continued_drop_avg_slope.png')
+    plt.close()
+
+    # 2. Total Drop Over Window
+    bins2 = get_bins(total_drop_successful, total_drop_failed, 0.1)
+    plt.figure(figsize=(8, 6))
+    plt.hist(total_drop_successful, bins=bins2, alpha=0.7, label='Successful', color='green')
+    plt.hist(total_drop_failed, bins=bins2, alpha=0.7, label='Failed', color='red')
+    plt.title('Total Drop Over Window')
+    plt.xlabel('Total Drop (last - first)')
+    plt.ylabel('Count')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('continued_drop_total_drop_window.png')
+    plt.close()
+
+    # 3. Consecutive Negative Slopes After Sharpest Drop
+    plt.figure(figsize=(8, 6))
+    plt.hist(consecutive_neg_successful, bins=range(lookahead+2), alpha=0.7, label='Successful', color='green', align='left')
+    plt.hist(consecutive_neg_failed, bins=range(lookahead+2), alpha=0.7, label='Failed', color='red', align='left')
+    plt.title('Consecutive Negative Slopes After Sharpest Drop')
+    plt.xlabel('Consecutive Negative Slopes')
+    plt.ylabel('Count')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('continued_drop_consecutive_neg.png')
+    plt.close()
+
+    # 4. Total Drop After Sharpest Drop
+    bins4 = get_bins(drop_after_sharpest_successful, drop_after_sharpest_failed, 0.1)
+    plt.figure(figsize=(8, 6))
+    plt.hist(drop_after_sharpest_successful, bins=bins4, alpha=0.7, label='Successful', color='green')
+    plt.hist(drop_after_sharpest_failed, bins=bins4, alpha=0.7, label='Failed', color='red')
+    plt.title('Total Drop After Sharpest Drop')
+    plt.xlabel('Total Drop (end - sharpest)')
+    plt.ylabel('Count')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('continued_drop_after_sharpest.png')
+    plt.close()
+
+    # 5. Total Drop After Initial Drop
+    bins5 = get_bins(total_drop_after_initial_successful, total_drop_after_initial_failed, 0.1)
+    plt.figure(figsize=(8, 6))
+    plt.hist(total_drop_after_initial_successful, bins=bins5, alpha=0.7, label='Successful', color='green')
+    plt.hist(total_drop_after_initial_failed, bins=bins5, alpha=0.7, label='Failed', color='red')
+    plt.title('Total Drop After Initial Drop')
+    plt.xlabel('Total Drop (end - initial)')
+    plt.ylabel('Count')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('continued_drop_after_initial.png')
+    plt.close()
 
 if __name__ == "__main__":
     main() 
