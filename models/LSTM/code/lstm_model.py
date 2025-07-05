@@ -513,45 +513,72 @@ class VortexLSTMModel:
             print(f"[PATTERN ANALYSIS] Mean pressure in failed patterns: {np.mean(mean_failed):.2f} ± {np.mean(std_failed):.2f}")
             print(f"[PATTERN ANALYSIS] Pressure difference: {np.mean(mean_successful - mean_failed):.2f}")
             
-            # Plot patterns
-            plt.figure(figsize=(15, 10))
-            
-            # Plot mean patterns
-            plt.subplot(2, 2, 1)
+            # Calculate minimum slope (sharpest drop) for each pattern
+            min_slope_successful = [np.min(np.diff(p)) for p in successful_patterns]
+            min_slope_failed = [np.min(np.diff(p)) for p in failed_patterns]
+
+            # 6. Sharpest short-window slope (max negative difference over 3 consecutive points)
+            def max_short_window_slope(pattern, window=3):
+                return np.min([pattern[i+window-1] - pattern[i] for i in range(len(pattern)-window+1)])
+            short_window_slope_successful = [max_short_window_slope(p, window=3) for p in successful_patterns]
+            short_window_slope_failed = [max_short_window_slope(p, window=3) for p in failed_patterns]
+
+            # 7. Drop duration (number of points from start to end of main drop)
+            def drop_duration(pattern, threshold=0.1):
+                # Find the largest drop in the pattern
+                diffs = np.diff(pattern)
+                min_idx = np.argmin(diffs)
+                # Go backwards to find where the drop started
+                start = min_idx
+                while start > 0 and diffs[start] < -threshold:
+                    start -= 1
+                # Go forwards to find where the drop ended
+                end = min_idx
+                while end < len(diffs)-1 and diffs[end] < -threshold:
+                    end += 1
+                return end - start + 1
+
+            # Use a threshold of 0.1 for what counts as a drop
+            sharp_drop_duration_successful = [drop_duration(p, threshold=0.1) for p in successful_patterns]
+            sharp_drop_duration_failed = [drop_duration(p, threshold=0.1) for p in failed_patterns]
+
+            # Update figure to 3x3 grid for the new subplots
+            plt.figure(figsize=(22, 14))
+
+            # 1. Mean patterns
+            plt.subplot(3, 3, 1)
             time_points = np.arange(-window_size, window_size + 1)
             plt.plot(time_points, mean_successful, label='Successful Detections', color='green', linewidth=2)
             plt.plot(time_points, mean_failed, label='False Alarms', color='red', linewidth=2)
-            plt.fill_between(time_points, mean_successful - std_successful, mean_successful + std_successful, 
-                           color='green', alpha=0.2)
-            plt.fill_between(time_points, mean_failed - std_failed, mean_failed + std_failed, 
-                           color='red', alpha=0.2)
+            plt.fill_between(time_points, mean_successful - std_successful, mean_successful + std_successful, color='green', alpha=0.2)
+            plt.fill_between(time_points, mean_failed - std_failed, mean_failed + std_failed, color='red', alpha=0.2)
             plt.title('Mean Pressure Patterns Around Detections')
             plt.xlabel('Time Points (relative to detection)')
             plt.ylabel('Pressure')
             plt.legend()
             plt.grid(True)
-            
-            # Plot difference
-            plt.subplot(2, 2, 2)
+
+            # 2. Difference
+            plt.subplot(3, 3, 2)
             plt.plot(time_points, mean_successful - mean_failed, color='blue', linewidth=2)
             plt.title('Difference (Successful - Failed)')
             plt.xlabel('Time Points (relative to detection)')
             plt.ylabel('Pressure Difference')
             plt.grid(True)
-            
-            # Plot individual patterns (first few)
-            plt.subplot(2, 2, 3)
-            for i in range(min(5, len(successful_patterns))):
+
+            # 3. Individual patterns
+            plt.subplot(3, 3, 4)
+            for i in range(min(30, len(successful_patterns))):
                 plt.plot(time_points, successful_patterns[i], color='green', alpha=0.3)
-            for i in range(min(5, len(failed_patterns))):
+            for i in range(min(30, len(failed_patterns))):
                 plt.plot(time_points, failed_patterns[i], color='red', alpha=0.3)
-            plt.title('Individual Patterns (First 5 of each)')
+            plt.title('Individual Patterns (First 30 of each)')
             plt.xlabel('Time Points (relative to detection)')
             plt.ylabel('Pressure')
             plt.grid(True)
-            
-            # Plot SCLK distribution
-            plt.subplot(2, 2, 4)
+
+            # 4. SCLK distribution
+            plt.subplot(3, 3, 5)
             if len(successful_sclks) > 0:
                 plt.hist(successful_sclks, bins=20, alpha=0.7, label='Successful', color='green')
             if len(failed_sclks) > 0:
@@ -561,7 +588,37 @@ class VortexLSTMModel:
             plt.ylabel('Count')
             plt.legend()
             plt.grid(True)
-            
+
+            # 5. Minimum slope histogram
+            plt.subplot(3, 3, 6)
+            plt.hist(min_slope_successful, bins=30, alpha=0.7, label='Successful', color='green', range=(-1, 0.1))
+            plt.hist(min_slope_failed, bins=30, alpha=0.7, label='Failed', color='red', range=(-1, 0.1))
+            plt.title('Distribution of Minimum Slope in Detection Windows')
+            plt.xlabel('Minimum Slope (sharpest drop)')
+            plt.ylabel('Count')
+            plt.legend()
+            plt.grid(True)
+
+            # 6. Sharpest short-window slope (3-point drop)
+            plt.subplot(3, 3, 7)
+            plt.hist(short_window_slope_successful, bins=30, alpha=0.7, label='Successful', color='green', range=(-1, 0.1))
+            plt.hist(short_window_slope_failed, bins=30, alpha=0.7, label='Failed', color='red', range=(-1, 0.1))
+            plt.title('Sharpest 3-Point Drop in Detection Windows')
+            plt.xlabel('Max 3-Point Drop')
+            plt.ylabel('Count')
+            plt.legend()
+            plt.grid(True)
+
+            # 7. Drop duration
+            plt.subplot(3, 3, 8)
+            plt.hist(sharp_drop_duration_successful, bins=20, alpha=0.7, label='Successful', color='green')
+            plt.hist(sharp_drop_duration_failed, bins=20, alpha=0.7, label='Failed', color='red')
+            plt.title('Drop Duration in Detection Windows')
+            plt.xlabel('Drop Duration (points)')
+            plt.ylabel('Count')
+            plt.legend()
+            plt.grid(True)
+
             plt.tight_layout()
             plt.savefig('detection_patterns.png')
             plt.close()
@@ -621,7 +678,7 @@ class VortexLSTMModel:
             plt.hist(successful_confidences, bins=20, alpha=0.7, label='Successful', color='green', density=True)
             plt.hist(failed_confidences, bins=50, alpha=0.7, label='Failed', color='red', density=True)
             plt.title('Confidence Distribution')
-            plt.xlabel('Confidence Score')
+            plt.xlabel('Confidence Value')
             plt.ylabel('Density')
             plt.legend()
             plt.grid(True)
@@ -1506,6 +1563,64 @@ def main():
 
     # After triggered event evaluation in main()
     triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
+
+    # --- Sharpest N-Point Drop Analysis (Separate Chart) ---
+    window_sizes = [2, 3, 5, 10]
+    sharpest_drops_successful = {}
+    sharpest_drops_failed = {}
+    for w in window_sizes:
+        sharpest_drops_successful[w] = [np.min([p[i+w-1] - p[i] for i in range(len(p)-w+1)]) for p in successful_patterns]
+        sharpest_drops_failed[w] = [np.min([p[i+w-1] - p[i] for i in range(len(p)-w+1)]) for p in failed_patterns]
+
+    plt.figure(figsize=(18, 12))
+    for idx, w in enumerate(window_sizes):
+        plt.subplot(2, 2, idx+1)
+        plt.hist(sharpest_drops_successful[w], bins=30, alpha=0.7, label='Successful', color='green', range=(-1, 0.1))
+        plt.hist(sharpest_drops_failed[w], bins=30, alpha=0.7, label='Failed', color='red', range=(-1, 0.1))
+        plt.title(f'Sharpest {w}-Point Drop in Detection Windows')
+        plt.xlabel(f'Max {w}-Point Drop')
+        plt.ylabel('Count')
+        plt.legend()
+        plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('sharpest_n_point_drops.png')
+    plt.close()
+
+    # ... after test_results = model.evaluate(X_test, y_test)
+    # Save original predictions for pre-filter analysis
+    y_pred_pre_filter = test_results['y_pred'].copy()
+    y_pred_proba_pre_filter = test_results['y_pred_proba'].copy()
+
+    # Prepare for sharpest N-point drop analysis using correct detection patterns
+    window_starts = np.arange(model.window_size, len(test_data))
+    events = model.extract_event_ranges(test_data['gt_detection_win'].values, test_data['gt_fwhm'].values)
+    pattern_results = model.analyze_detection_patterns(test_results['y_pred'], window_starts, events, test_data)
+    successful_patterns = pattern_results['successful_patterns']
+    failed_patterns = pattern_results['failed_patterns']
+
+    # --- Sharp Drop Post-Processing Filter ---
+    # Use sharpest 2-point drop (min diff) as filter
+    min_slope_threshold = -0.3  # You can adjust this threshold
+    X_test_pressure = X_test[:, :, 0]  # Assuming pressure is the first feature
+    y_pred_post_filter = y_pred_pre_filter.copy()
+    for i, pred in enumerate(y_pred_pre_filter):
+        if pred == 1:
+            pressure_window = X_test_pressure[i]
+            min_slope = np.min(np.diff(pressure_window))
+            if min_slope < min_slope_threshold:
+                y_pred_post_filter[i] = 0
+
+    # --- Confidence Analysis Pre- and Post-Filtering ---
+    # Pre-filter confidence analysis
+    model.analyze_confidence_distribution(y_pred_pre_filter, y_pred_proba_pre_filter, window_starts, events, test_data)
+    import os
+    if os.path.exists('confidence_analysis.png'):
+        os.rename('confidence_analysis.png', 'confidence_analysis_pre_filter.png')
+
+    # Post-filter confidence analysis
+    model.analyze_confidence_distribution(y_pred_post_filter, y_pred_proba_pre_filter, window_starts, events, test_data)
+    if os.path.exists('confidence_analysis.png'):
+        os.rename('confidence_analysis.png', 'confidence_analysis_post_filter.png')
 
 if __name__ == "__main__":
     main() 
