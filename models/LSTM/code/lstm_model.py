@@ -22,6 +22,10 @@ from plotting_utils import (plot_confidence_distribution, plot_confidence_timeli
                            plot_detection_patterns, plot_confidence_analysis, 
                            plot_pressure_patterns, plot_training_history,
                            plot_continued_drop_analysis, plot_sharpest_n_point_drops)
+from feature_importance_rf import compute_rf_feature_importance
+
+# Import artifact detector
+from artifact_detector import ArtifactDetector
 print("Using GPU:", tf.config.list_physical_devices('GPU'))
 mixed_precision.set_global_policy("mixed_float16")
 
@@ -56,7 +60,8 @@ class VortexLSTMModel:
         """Print debug information if debug flag is set."""
         debug_print(self.debug, *args, **kwargs)
         
-    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, feature_set: str = 'shape') -> tuple:
+    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, feature_set: str = 'shape', 
+                         use_artifacts: bool = False, artifact_ratio: float = 0.5) -> tuple:
         """
         Prepare sequences for vortex prediction using local detrending.
         Each window is normalized independently to make features invariant
@@ -68,6 +73,8 @@ class VortexLSTMModel:
             apply_sampling: If True, creates balanced dataset from vortex events.
                           If False, processes all available data using a sliding window.
             feature_set: 'shape' for (pressure, acceleration) or 'statistical' for (pressure, skew, kurtosis)
+            use_artifacts: If True, include artifact windows as negative training examples
+            artifact_ratio: Ratio of artifacts to include relative to vortex events
         """
         pressure_values = data['PRESSURE'].values
         gt_detection = data['gt_detection_win'].values
@@ -90,7 +97,18 @@ class VortexLSTMModel:
                 # 3. Calculate features based on the chosen set
                 if feature_set == 'shape':
                     acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
-                    sequence = np.stack([detrended_pressure, acceleration], axis=1)
+                    
+                    # Add new discriminative features from pattern analysis
+                    slopes = np.diff(detrended_pressure)
+                    slope_std = np.std(slopes)
+                    
+                    # Normalized pressure std (baseline-invariant)
+                    normalized_pressure_std = np.std(detrended_pressure)  # Already detrended, so this is normalized
+                    
+                    sequence = np.stack([detrended_pressure, acceleration, 
+                                       np.full_like(detrended_pressure, slope_std),
+                                       np.full_like(detrended_pressure, normalized_pressure_std)], axis=1)
+                    
                 elif feature_set == 'statistical':
                     rolling_series = pd.Series(detrended_pressure)
                     skewness = rolling_series.rolling(window=20, min_periods=1).skew().fillna(0).values
@@ -122,7 +140,15 @@ class VortexLSTMModel:
                     
                     if feature_set == 'shape':
                         acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
-                        sequence = np.stack([detrended_pressure, acceleration], axis=1)
+                        
+                        # Add new discriminative features from pattern analysis
+                        slopes = np.diff(detrended_pressure)
+                        slope_std = np.std(slopes)
+                        normalized_pressure_std = np.std(detrended_pressure)  # Already detrended
+                        
+                        sequence = np.stack([detrended_pressure, acceleration, 
+                                           np.full_like(detrended_pressure, slope_std),
+                                           np.full_like(detrended_pressure, normalized_pressure_std)], axis=1)
                     elif feature_set == 'statistical':
                         rolling_series = pd.Series(detrended_pressure)
                         skewness = rolling_series.rolling(window=20, min_periods=1).skew().fillna(0).values
@@ -145,7 +171,15 @@ class VortexLSTMModel:
                     
                     if feature_set == 'shape':
                         acceleration_neg = np.diff(detrended_pressure_neg, n=2, prepend=[detrended_pressure_neg[0], detrended_pressure_neg[0]])
-                        sequence_neg = np.stack([detrended_pressure_neg, acceleration_neg], axis=1)
+                        
+                        # Add new discriminative features from pattern analysis
+                        slopes_neg = np.diff(detrended_pressure_neg)
+                        slope_std_neg = np.std(slopes_neg)
+                        normalized_pressure_std_neg = np.std(detrended_pressure_neg)  # Already detrended
+                        
+                        sequence_neg = np.stack([detrended_pressure_neg, acceleration_neg,
+                                               np.full_like(detrended_pressure_neg, slope_std_neg),
+                                               np.full_like(detrended_pressure_neg, normalized_pressure_std_neg)], axis=1)
                     elif feature_set == 'statistical':
                         rolling_series_neg = pd.Series(detrended_pressure_neg)
                         skewness_neg = rolling_series_neg.rolling(window=20, min_periods=1).skew().fillna(0).values
@@ -158,6 +192,50 @@ class VortexLSTMModel:
             self.debug_print("\nBalanced data statistics (after local detrending):")
             self.debug_print(f"Total sequences: {len(sequences_list)}")
             self.debug_print(f"Vortex sequences: {sum(labels_list)}")
+            
+            # Add artifact windows if requested
+            if use_artifacts:
+                self.debug_print("\nAdding artifact windows as negative training examples...")
+                artifact_detector = ArtifactDetector(window_size=self.window_size)
+                X_artifacts, y_artifacts = artifact_detector.prepare_artifact_training_data(data, artifact_ratio)
+                
+                if len(X_artifacts) > 0:
+                    # Convert artifact sequences to match feature_set format
+                    artifact_sequences = []
+                    for artifact in X_artifacts:
+                        if feature_set == 'shape':
+                            # Artifacts are already in shape format (pressure + acceleration)
+                            # Add new features to match current format
+                            detrended_pressure = artifact[:, 0]  # First channel is pressure
+                            acceleration = artifact[:, 1]  # Second channel is acceleration
+                            
+                            # Calculate new features
+                            slopes = np.diff(detrended_pressure)
+                            slope_std = np.std(slopes)
+                            normalized_pressure_std = np.std(detrended_pressure)
+                            
+                            artifact_enhanced = np.stack([detrended_pressure, acceleration,
+                                                        np.full_like(detrended_pressure, slope_std),
+                                                        np.full_like(detrended_pressure, normalized_pressure_std)], axis=1)
+                            artifact_sequences.append(artifact_enhanced)
+                        elif feature_set == 'statistical':
+                            # Convert to statistical format
+                            detrended_pressure = artifact[:, 0]  # First channel is pressure
+                            rolling_series = pd.Series(detrended_pressure)
+                            skewness = rolling_series.rolling(window=20, min_periods=1).skew().fillna(0).values
+                            kurtosis = rolling_series.rolling(window=20, min_periods=1).kurt().fillna(0).values
+                            artifact_statistical = np.stack([detrended_pressure, skewness, kurtosis], axis=1)
+                            artifact_sequences.append(artifact_statistical)
+                    
+                    # Add artifacts to sequences
+                    sequences_list.extend(artifact_sequences)
+                    labels_list.extend(y_artifacts)
+                    
+                    self.debug_print(f"Added {len(artifact_sequences)} artifact sequences")
+                    self.debug_print(f"Updated total sequences: {len(sequences_list)}")
+                    self.debug_print(f"Updated vortex sequences: {sum(labels_list)}")
+                else:
+                    self.debug_print("No artifacts detected in this dataset")
 
         sequences = np.array(sequences_list)
         labels = np.array(labels_list)
@@ -218,7 +296,7 @@ class VortexLSTMModel:
         
         return alpha
     
-    def build_model(self, input_shape: tuple, alpha: float = None, gamma: float = 1.5):
+    def build_model(self, input_shape: tuple, alpha: float = None, gamma: float = 1.5, learning_rate: float = 0.01):
         """Build the vortex prediction model with Bidirectional LSTM and temporal loss."""
         model = Sequential([
             Bidirectional(
@@ -234,7 +312,7 @@ class VortexLSTMModel:
         ])
         
         model.compile(
-            optimizer=Adam(learning_rate=0.001),
+            optimizer=Adam(learning_rate=learning_rate),
             loss=self.temporal_focal_loss(gamma=gamma, alpha=alpha, temporal_weight=0.4),
             metrics=['accuracy', 
                     tf.keras.metrics.AUC(curve='ROC', name='roc_auc'),
@@ -266,7 +344,7 @@ class VortexLSTMModel:
         
         return {0: weight_negative, 1: weight_positive}
 
-    def train(self, X_train, y_train, X_val, y_val, X_test, y_test, epochs=50, batch_size=256):
+    def train(self, X_train, y_train, X_val, y_val, X_test, y_test, epochs=50, batch_size=256, learning_rate=0.01):
         """Train the model with temporal-aware focal loss and class weights."""
         # Print statistics about the data
         self.debug_print("\nTraining Data Statistics:")
@@ -285,7 +363,7 @@ class VortexLSTMModel:
         self.debug_print("\nTraining vortex prediction model...")
         # The input shape will now depend on the feature set
         num_features = X_train.shape[2]
-        self.model = self.build_model((self.window_size, num_features), alpha=alpha, gamma=1.5)
+        self.model = self.build_model((self.window_size, num_features), alpha=alpha, gamma=1.5, learning_rate=learning_rate)
         
         # Add learning rate scheduler with adjusted patience
         reduce_lr = ReduceLROnPlateau(
@@ -502,6 +580,21 @@ class VortexLSTMModel:
         
         print(f"\n[PATTERN ANALYSIS] Successful detections: {len(successful_patterns)}")
         print(f"[PATTERN ANALYSIS] False alarms: {len(failed_patterns)}")
+        
+        # Analyze statistical differences between patterns
+        if len(successful_patterns) > 0 and len(failed_patterns) > 0:
+            from pattern_analysis import analyze_pattern_statistics, find_best_thresholds
+            
+            print("\n[PATTERN ANALYSIS] Analyzing statistical differences...")
+            stats = analyze_pattern_statistics(successful_patterns, failed_patterns)
+            thresholds = find_best_thresholds(stats)
+            
+            # Store the best discriminative features for potential use in artifact detection
+            if thresholds:
+                best_feature = max(thresholds.keys(), key=lambda k: thresholds[k]['f1_score'])
+                best_f1 = thresholds[best_feature]['f1_score']
+                print(f"\n[PATTERN ANALYSIS] Best discriminative feature: {best_feature} (F1={best_f1:.3f})")
+                print(f"[PATTERN ANALYSIS] This could be used to improve artifact detection!")
         
         if len(successful_patterns) > 0 and len(failed_patterns) > 0:
             # Calculate statistics
@@ -960,9 +1053,21 @@ def main():
     parser.add_argument('--window_size', type=int, default=30, help='Size of the input window for the LSTM.')
     parser.add_argument('--model_name', type=str, default='lstm_model.h5', help='Name for the saved model file.')
     parser.add_argument('--feature_set', type=str, default='shape', help="Feature set to use: 'shape' or 'statistical'")
+    parser.add_argument('--use_artifacts', action='store_true', help='Include artifact windows as negative training examples')
+    parser.add_argument('--artifact_ratio', type=float, default=0.5, help='Ratio of artifacts to include relative to vortex events (default: 0.5)')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training')
+    parser.add_argument('--learning_rate', type=float, default=0.01, help='Learning rate for training (default: 0.01)')
+    parser.add_argument('--rf_importance', action='store_true', help='Run Random Forest feature importance analysis')
+    parser.add_argument('--rf_features', nargs='+', help='Specific features to analyze (by name or index). If not specified, all features are used.')
     args = parser.parse_args()
     
     print("Starting LSTM model training...")
+    
+    # Show artifact configuration
+    if args.use_artifacts:
+        print(f"Artifact integration enabled with ratio: {args.artifact_ratio}")
+    else:
+        print("Artifact integration disabled")
     
     # Load data
     print("Loading data...")
@@ -1020,10 +1125,11 @@ def main():
     
     # Prepare sequences for each split
     print(f"\nPreparing training sequences with '{args.feature_set}' features...")
-    X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True, feature_set=args.feature_set)
+    X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True, feature_set=args.feature_set, 
+                                              use_artifacts=args.use_artifacts, artifact_ratio=args.artifact_ratio)
     
     print(f"\nPreparing validation sequences with '{args.feature_set}' features...")
-    X_val, y_val = model.prepare_sequences(val_data, apply_sampling=True, feature_set=args.feature_set)
+    X_val, y_val = model.prepare_sequences(val_data, apply_sampling=False, feature_set=args.feature_set)
     
     print(f"\nPreparing test sequences with '{args.feature_set}' features...")
     X_test, y_test = model.prepare_sequences(test_data, apply_sampling=False, feature_set=args.feature_set)
@@ -1055,7 +1161,7 @@ def main():
         
         # Train model
         print("\nTraining LSTM model...")
-        history = model.train(X_train, y_train, X_val, y_val, X_test, y_test, epochs=30, batch_size=128)
+        history = model.train(X_train, y_train, X_val, y_val, X_test, y_test, epochs=30, batch_size=args.batch_size, learning_rate=args.learning_rate)
         
         # Save model
         model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1543,6 +1649,63 @@ def main():
     print(f"\nBest F1-score after all filters: {best_f1:.4f} at total_drop_after_sharpest threshold {best_thresh:.2f}")
     # Use the best filter for subsequent post-filter analysis
     y_pred_post_filter = best_y_pred
+
+    # At the end, after all evaluation and visualization:
+    if args.rf_importance:
+        print("\nRunning Random Forest feature importance analysis...")
+        print(f"Using feature set: {args.feature_set}")
+        n_samples, window_size, n_features = X_test.shape
+        if args.feature_set == 'shape':
+            base_feature_names = ['pressure', 'acceleration', 'slope_std', 'normalized_pressure_std']
+        elif args.feature_set == 'statistical':
+            base_feature_names = ['pressure', 'skewness', 'kurtosis']
+        else:
+            base_feature_names = [f'feature_{i}' for i in range(n_features)]
+        statistics = [
+            ('mean', np.mean),
+            ('std', np.std),
+            ('min', np.min),
+            ('max', np.max),
+            ('q25', lambda x: np.percentile(x, 25)),
+            ('q75', lambda x: np.percentile(x, 75)),
+            ('median', np.median),
+            ('range', lambda x: np.max(x) - np.min(x)),
+            ('iqr', lambda x: np.percentile(x, 75) - np.percentile(x, 25)),
+        ]
+        from tqdm import tqdm
+        print(f"Processing {n_samples} samples for RF feature importance analysis...")
+        print("[DEBUG] Entering tqdm feature extraction loop...")
+        rf_features = []
+        rf_feature_names = []
+        for i in tqdm(range(n_samples), desc="Extracting features"):
+            sample_features = []
+            for feat_idx in range(n_features):
+                feature_values = X_test[i, :, feat_idx]
+                for stat_name, stat_func in statistics:
+                    sample_features.append(stat_func(feature_values))
+            rf_features.append(sample_features)
+            if i == 0:
+                for feat_name in base_feature_names:
+                    for stat_name, _ in statistics:
+                        rf_feature_names.append(f'{feat_name}_{stat_name}')
+        print("[DEBUG] Exited tqdm feature extraction loop.")
+        X_2d = np.array(rf_features)
+        print(f"Feature matrix shape: {X_2d.shape}")
+        print(f"Number of features: {len(rf_feature_names)}")
+        print(f"Features: {rf_feature_names}")
+        rf_importances, rf_feature_names_used, rf_performance = compute_rf_feature_importance(
+            X_2d, y_test, 
+            feature_names=rf_feature_names,
+            selected_features=args.rf_features,
+            balance_classes=False,  # Use test data as-is (like LSTM test evaluation)
+            original_data=test_data  # Pass original data (not used when balance_classes=False)
+        )
+        
+        print(f"\nRF Analysis Summary:")
+        print(f"ROC-AUC: {rf_performance['roc_auc']:.4f}")
+        print(f"PR-AUC: {rf_performance['pr_auc']:.4f}")
+        print(f"Test samples: {rf_performance['test_samples']}")
+        print(f"Balanced sampling: {rf_performance['balanced']}")
 
 if __name__ == "__main__":
     main() 
