@@ -1,7 +1,0 @@
-1. Move all feature extraction and post-processing filter logic from lstm_model.py into a new module feature_engineering.py. Update lstm_model.py to use these new functions. Test to ensure all feature extraction and filtering still work as before.
-2. Move metric calculation, confusion matrix, and threshold sweep logic into evaluation_utils.py. Update lstm_model.py to use these new functions. Test to ensure all evaluation and thresholding works as before.
-3. Move all plotting and visualization code into plotting_utils.py. Update lstm_model.py to use these new functions. Test to ensure all plots are generated as before.
-4. Remove or comment out obsolete/legacy code and unused functions from lstm_model.py.
-5. Streamline the main workflow in lstm_model.py for clarity: load data → train/evaluate model → post-process → analyze/plot.
-6. Add docstrings and comments to clarify the purpose of each function and major block.
-7. (Optional) Consider splitting the VortexLSTMModel class into its own file if it grows too large or if you want to support multiple model types in the future. 
