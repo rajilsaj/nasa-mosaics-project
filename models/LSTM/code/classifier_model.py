@@ -545,6 +545,75 @@ def main():
     print(f"F1-Score: {test_results['f1']:.4f}")
     print(f"ROC-AUC: {test_results['auc']:.4f}")
     print(f"PR-AUC: {test_results['average_precision']:.4f}")
+    
+    # Event-based evaluation
+    print("\n" + "="*50)
+    print("EVENT-BASED EVALUATION")
+    print("="*50)
+    
+    # Load original test data for ground truth
+    if args.filtered_data:
+        # We need the original data for gt_detection_win and gt_fwhm
+        print("\nLoading original test data for event-based evaluation...")
+        if not args.data_path:
+            data_path = Path(__file__).parent.parent.parent.parent / 'data' / 'ml_ready_vortex_data.csv'
+        else:
+            data_path = args.data_path
+            
+        original_data = pd.read_csv(data_path)
+        
+        # Get original indices from filtered data for proper alignment
+        print("\nAligning filtered data with original data...")
+        filtered_indices = filtered_data['original_indices']
+        
+        # Get test portion of filtered indices
+        test_filtered_indices = filtered_indices[split_idx:]
+        
+        # Map to original data positions
+        original_test_indices = test_filtered_indices
+        
+        # Get original test data using mapped indices
+        test_original_data = original_data.iloc[original_test_indices].reset_index(drop=True)
+        
+        # Verify alignment with SCLK values
+        print(f"Verifying data alignment...")
+        print(f"Test predictions length: {len(test_results['y_pred'])}")
+        print(f"Original test data length: {len(test_original_data)}")
+        
+        if len(test_results['y_pred']) != len(test_original_data):
+            print("WARNING: Length mismatch! This indicates alignment issues.")
+            print("Falling back to sequential alignment...")
+            # Fallback: use sequential alignment
+            test_start_idx = split_idx
+            test_end_idx = len(original_data)
+            test_original_data = original_data.iloc[test_start_idx:test_end_idx].reset_index(drop=True)
+        else:
+            print("✅ Data alignment verified!")
+        
+        # Get predictions aligned with original data
+        predictions = test_results['y_pred']
+        
+        # Import and run event-based evaluation
+        from event_based_evaluation import evaluate_vortex_detection
+        
+        event_results = evaluate_vortex_detection(
+            predictions=predictions,
+            gt_detection_win=test_original_data['gt_detection_win'].values,
+            gt_fwhm=test_original_data['gt_fwhm'].values,
+            verbose=True
+        )
+        
+        print(f"\n" + "="*50)
+        print("EVENT-BASED SUMMARY")
+        print("="*50)
+        print(f"Point-wise F1: {test_results['f1']:.4f}")
+        print(f"Event-based F1: {event_results['event_metrics']['f1']:.4f}")
+        print(f"Improvement: {event_results['event_metrics']['f1'] - test_results['f1']:.4f}")
+        print(f"Event-based Recall: {event_results['event_metrics']['recall']:.4f}")
+        print(f"Event-based Precision: {event_results['event_metrics']['precision']:.4f}")
+    else:
+        print("\nEvent-based evaluation requires original data with gt_detection_win and gt_fwhm columns.")
+        print("Please provide --data_path argument for full evaluation.")
 
 if __name__ == "__main__":
     main() 
