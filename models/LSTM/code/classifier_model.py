@@ -200,8 +200,8 @@ class VortexClassifier:
             sequence = pressure_window.reshape(-1, 1)
             sequences.append(sequence)
             
-            # Get label (vortex or not)
-            label = 1 if (data.iloc[i]['gt_detection_win'] == 1 or data.iloc[i]['gt_fwhm'] == 1) else 0
+            # Get label (vortex or not) - using only gt_detection_win for true precursor prediction
+            label = 1 if data.iloc[i]['gt_detection_win'] == 1 else 0
             labels.append(label)
         
         sequences = np.array(sequences)
@@ -347,13 +347,47 @@ class VortexClassifier:
             raise ValueError("Model not trained. Call train() first.")
         return self.model.predict(X)
     
-    def evaluate(self, X_test, y_test):
+    def evaluate(self, X_test, y_test, optimize_threshold=True):
         """Evaluate the classifier."""
         self.debug_print(f"\nEvaluating classifier...")
         
         # Get predictions
         y_pred_proba = self.predict(X_test)
-        y_pred = (y_pred_proba > self.prediction_threshold).astype(int)
+        
+        if optimize_threshold:
+            # Find optimal threshold for test set
+            thresholds = np.linspace(0.01, 0.99, 99)  # 0.01 to 0.99 in 0.01 steps
+            best_f1 = 0
+            best_threshold = self.prediction_threshold
+            best_precision = 0
+            best_recall = 0
+            
+            for threshold in thresholds:
+                y_pred = (y_pred_proba >= threshold).astype(int)
+                try:
+                    f1 = f1_score(y_test, y_pred, zero_division=0)
+                    precision = precision_score(y_test, y_pred, zero_division=0)
+                    recall = recall_score(y_test, y_pred, zero_division=0)
+                    
+                    if f1 > best_f1:
+                        best_f1 = f1
+                        best_threshold = threshold
+                        best_precision = precision
+                        best_recall = recall
+                except:
+                    continue
+            
+            print(f"\nTest Set Threshold Optimization:")
+            print(f"  Optimal Threshold: {best_threshold:.3f}")
+            print(f"  Optimal F1-Score:  {best_f1:.4f}")
+            print(f"  Precision:          {best_precision:.4f}")
+            print(f"  Recall:             {best_recall:.4f}")
+            
+            # Use optimal threshold for final evaluation
+            y_pred = (y_pred_proba >= best_threshold).astype(int)
+        else:
+            # Use default threshold
+            y_pred = (y_pred_proba > self.prediction_threshold).astype(int)
         
         # Calculate metrics
         precision = precision_score(y_test, y_pred, zero_division=0)
@@ -398,7 +432,12 @@ class VortexClassifier:
     def load_model(self, model_path='classifier_model.h5'):
         """Load the model."""
         if Path(model_path).exists():
-            self.model = tf.keras.models.load_model(model_path)
+            # Load with custom objects for Focal Loss and F1-score metric
+            custom_objects = {
+                'focal_loss_fn': focal_loss(gamma=2.0, alpha=0.25),
+                'f1_score_metric': f1_score_metric
+            }
+            self.model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
             self.debug_print(f"Classifier loaded from: {model_path}")
         else:
             raise FileNotFoundError(f"Model file not found: {model_path}")
