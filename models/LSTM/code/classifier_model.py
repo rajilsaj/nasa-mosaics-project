@@ -467,7 +467,7 @@ def main():
         print(f"Loading filtered data from: {args.filtered_data}")
         import pickle
         
-        # Handle both compressed (.gz) and uncompressed files
+        # Handle compressed and uncompressed files
         if args.filtered_data.endswith('.gz'):
             import gzip
             with gzip.open(args.filtered_data, 'rb') as f:
