@@ -57,7 +57,7 @@ python classifier_model.py --filtered_data filtered_data_85.pkl --data_path ../.
 
 ### 4. Evaluate Classifier Only (Using Pretrained Model)
 ```bash
-python classifier_model.py --filtered_data filtered_data_85.pkl --data_path ../../../data/ml_ready_vortex_data.csv
+python classifier_model.py --filtered_data filtered_data_85.pkl.gz --data_path [path_to_ml_ready_vortex_data.csv]
 ```
 
 ### 5. Evaluate Full Pipeline (Not implemented yet)
@@ -69,7 +69,7 @@ python two_stage_pipeline.py --data_path ../../../data/ml_ready_vortex_data.csv
 
 - `autoencoder_model.h5` - Trained autoencoder (included)
 - `classifier_model.h5` - Trained classifier (included)
-- `filtered_data_85.pkl` - Filtered dataset for classifier training (included)
+- `filtered_data_85.pkl.gz` - Compressed filtered dataset for classifier training (included)
 
 **Note**: Pretrained models are included in this repository, so you can skip training and go directly to evaluation.
 

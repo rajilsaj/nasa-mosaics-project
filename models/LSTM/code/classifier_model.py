@@ -466,8 +466,15 @@ def main():
     if args.filtered_data:
         print(f"Loading filtered data from: {args.filtered_data}")
         import pickle
-        with open(args.filtered_data, 'rb') as f:
-            filtered_data = pickle.load(f)
+        
+        # Handle both compressed (.gz) and uncompressed files
+        if args.filtered_data.endswith('.gz'):
+            import gzip
+            with gzip.open(args.filtered_data, 'rb') as f:
+                filtered_data = pickle.load(f)
+        else:
+            with open(args.filtered_data, 'rb') as f:
+                filtered_data = pickle.load(f)
         
         sequences = filtered_data['sequences']
         labels = filtered_data['labels']
