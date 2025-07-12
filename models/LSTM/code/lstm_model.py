@@ -6,40 +6,25 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras import mixed_precision
-from sklearn.preprocessing import MinMaxScaler
 from pathlib import Path
 import time
 import argparse
-# import matplotlib.pyplot as plt  # Moved to plotting_utils.py
-import joblib
 import tensorflow.keras.backend as K
 from tensorflow.keras.regularizers import l2
-import gc
 import numpy as np
-import feature_engineering
 from evaluation_utils import compute_classification_metrics, sweep_confidence_thresholds
 from plotting_utils import (plot_confidence_distribution, plot_confidence_timeline, 
                            plot_detection_patterns, plot_confidence_analysis, 
-                           plot_pressure_patterns, plot_training_history,
-                           plot_continued_drop_analysis, plot_sharpest_n_point_drops)
-from feature_importance_rf import compute_rf_feature_importance
+                           plot_pressure_patterns, plot_training_history)
 
 # Import artifact detector
 from artifact_detector import ArtifactDetector
 print("Using GPU:", tf.config.list_physical_devices('GPU'))
 mixed_precision.set_global_policy("mixed_float16")
 
-
-
 # Add utils directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent.parent / 'utils'))
 from visualize_lstm_metrics import visualize_lstm_metrics, create_lstm_report
-
-# Remove sys.path.append for feature_engineering and any other sys.path hacks for code modules now imported normally
-try:
-    sys.path.remove(str(Path(__file__).parent.parent.parent.parent / 'feature_engineering'))
-except ValueError:
-    pass
 
 def debug_print(debug: bool, *args, **kwargs):
     """Print debug information if debug flag is set."""
@@ -60,7 +45,7 @@ class VortexLSTMModel:
         """Print debug information if debug flag is set."""
         debug_print(self.debug, *args, **kwargs)
         
-    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, feature_set: str = 'shape', 
+    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, 
                          use_artifacts: bool = False, artifact_ratio: float = 0.5) -> tuple:
         """
         Prepare sequences for vortex prediction using local detrending.
@@ -72,7 +57,6 @@ class VortexLSTMModel:
             data: Input data
             apply_sampling: If True, creates balanced dataset from vortex events.
                           If False, processes all available data using a sliding window.
-            feature_set: 'shape' for (pressure, acceleration) or 'statistical' for (pressure, skew, kurtosis)
             use_artifacts: If True, include artifact windows as negative training examples
             artifact_ratio: Ratio of artifacts to include relative to vortex events
         """
@@ -94,30 +78,10 @@ class VortexLSTMModel:
                 local_mean = np.mean(pressure_window)
                 detrended_pressure = pressure_window - local_mean
                 
-                # 3. Calculate features based on the chosen set
-                if feature_set == 'shape':
-                    acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
-                    
-                    # Add new discriminative features from pattern analysis
-                    slopes = np.diff(detrended_pressure)
-                    slope_std = np.std(slopes)
-                    
-                    # Normalized pressure std (baseline-invariant)
-                    normalized_pressure_std = np.std(detrended_pressure)  # Already detrended, so this is normalized
-                    
-                    sequence = np.stack([detrended_pressure, acceleration, 
-                                       np.full_like(detrended_pressure, slope_std),
-                                       np.full_like(detrended_pressure, normalized_pressure_std)], axis=1)
-                    
-                elif feature_set == 'statistical':
-                    rolling_series = pd.Series(detrended_pressure)
-                    skewness = rolling_series.rolling(window=20, min_periods=1).skew().fillna(0).values
-                    kurtosis = rolling_series.rolling(window=20, min_periods=1).kurt().fillna(0).values
-                    sequence = np.stack([detrended_pressure, skewness, kurtosis], axis=1)
-                else:
-                    raise ValueError("feature_set must be 'shape' or 'statistical'")
+                # 3. Reshape for LSTM: (window_size, 1) - single feature
+                sequence = detrended_pressure.reshape(-1, 1)
                 
-                # 6. Determine the label for the window
+                # 4. Determine the label for the window
                 label = 1 if np.any(gt_detection[i-self.window_size:i] == 1) else 0
                 sequences_list.append(sequence)
                 labels_list.append(label)
@@ -138,23 +102,8 @@ class VortexLSTMModel:
                     local_mean = np.mean(pressure_window)
                     detrended_pressure = pressure_window - local_mean
                     
-                    if feature_set == 'shape':
-                        acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
-                        
-                        # Add new discriminative features from pattern analysis
-                        slopes = np.diff(detrended_pressure)
-                        slope_std = np.std(slopes)
-                        normalized_pressure_std = np.std(detrended_pressure)  # Already detrended
-                        
-                        sequence = np.stack([detrended_pressure, acceleration, 
-                                           np.full_like(detrended_pressure, slope_std),
-                                           np.full_like(detrended_pressure, normalized_pressure_std)], axis=1)
-                    elif feature_set == 'statistical':
-                        rolling_series = pd.Series(detrended_pressure)
-                        skewness = rolling_series.rolling(window=20, min_periods=1).skew().fillna(0).values
-                        kurtosis = rolling_series.rolling(window=20, min_periods=1).kurt().fillna(0).values
-                        sequence = np.stack([detrended_pressure, skewness, kurtosis], axis=1)
-
+                    # Reshape for LSTM: (window_size, 1) - single feature
+                    sequence = detrended_pressure.reshape(-1, 1)
                     sequences_list.append(sequence)
                     labels_list.append(1)
 
@@ -169,23 +118,8 @@ class VortexLSTMModel:
                     local_mean_neg = np.mean(pressure_window_neg)
                     detrended_pressure_neg = pressure_window_neg - local_mean_neg
                     
-                    if feature_set == 'shape':
-                        acceleration_neg = np.diff(detrended_pressure_neg, n=2, prepend=[detrended_pressure_neg[0], detrended_pressure_neg[0]])
-                        
-                        # Add new discriminative features from pattern analysis
-                        slopes_neg = np.diff(detrended_pressure_neg)
-                        slope_std_neg = np.std(slopes_neg)
-                        normalized_pressure_std_neg = np.std(detrended_pressure_neg)  # Already detrended
-                        
-                        sequence_neg = np.stack([detrended_pressure_neg, acceleration_neg,
-                                               np.full_like(detrended_pressure_neg, slope_std_neg),
-                                               np.full_like(detrended_pressure_neg, normalized_pressure_std_neg)], axis=1)
-                    elif feature_set == 'statistical':
-                        rolling_series_neg = pd.Series(detrended_pressure_neg)
-                        skewness_neg = rolling_series_neg.rolling(window=20, min_periods=1).skew().fillna(0).values
-                        kurtosis_neg = rolling_series_neg.rolling(window=20, min_periods=1).kurt().fillna(0).values
-                        sequence_neg = np.stack([detrended_pressure_neg, skewness_neg, kurtosis_neg], axis=1)
-
+                    # Reshape for LSTM: (window_size, 1) - single feature
+                    sequence_neg = detrended_pressure_neg.reshape(-1, 1)
                     sequences_list.append(sequence_neg)
                     labels_list.append(0)
 
@@ -200,32 +134,13 @@ class VortexLSTMModel:
                 X_artifacts, y_artifacts = artifact_detector.prepare_artifact_training_data(data, artifact_ratio)
                 
                 if len(X_artifacts) > 0:
-                    # Convert artifact sequences to match feature_set format
+                    # Convert artifact sequences to match simplified format (single feature)
                     artifact_sequences = []
                     for artifact in X_artifacts:
-                        if feature_set == 'shape':
-                            # Artifacts are already in shape format (pressure + acceleration)
-                            # Add new features to match current format
-                            detrended_pressure = artifact[:, 0]  # First channel is pressure
-                            acceleration = artifact[:, 1]  # Second channel is acceleration
-                            
-                            # Calculate new features
-                            slopes = np.diff(detrended_pressure)
-                            slope_std = np.std(slopes)
-                            normalized_pressure_std = np.std(detrended_pressure)
-                            
-                            artifact_enhanced = np.stack([detrended_pressure, acceleration,
-                                                        np.full_like(detrended_pressure, slope_std),
-                                                        np.full_like(detrended_pressure, normalized_pressure_std)], axis=1)
-                            artifact_sequences.append(artifact_enhanced)
-                        elif feature_set == 'statistical':
-                            # Convert to statistical format
-                            detrended_pressure = artifact[:, 0]  # First channel is pressure
-                            rolling_series = pd.Series(detrended_pressure)
-                            skewness = rolling_series.rolling(window=20, min_periods=1).skew().fillna(0).values
-                            kurtosis = rolling_series.rolling(window=20, min_periods=1).kurt().fillna(0).values
-                            artifact_statistical = np.stack([detrended_pressure, skewness, kurtosis], axis=1)
-                            artifact_sequences.append(artifact_statistical)
+                        # Artifacts are already detrended pressure, just reshape to single feature
+                        detrended_pressure = artifact[:, 0]  # First channel is pressure
+                        artifact_single_feature = detrended_pressure.reshape(-1, 1)
+                        artifact_sequences.append(artifact_single_feature)
                     
                     # Add artifacts to sequences
                     sequences_list.extend(artifact_sequences)
@@ -240,7 +155,6 @@ class VortexLSTMModel:
         sequences = np.array(sequences_list)
         labels = np.array(labels_list)
         
-        # We no longer return normalization stats
         return sequences, labels
         
     def temporal_focal_loss(self, gamma=1.5, alpha=None, temporal_weight=0.1):
@@ -553,7 +467,7 @@ class VortexLSTMModel:
         successful_sclks = []
         failed_sclks = []
         
-        window_size = 60  # or model.window_size if available
+        window_size = self.window_size
         for i, prediction in enumerate(y_pred):
             if prediction == 1:  # Positive prediction
                 detection_idx = window_starts[i]
@@ -951,43 +865,52 @@ def find_detection_windows(data: pd.DataFrame, debug: bool = False) -> list:
     
     return windows
 
-def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame, feature_set: str = 'shape') -> dict:
-    """Evaluate model performance on the full dataset."""
-    debug_print(model.debug, "\nPreparing sequences from full dataset (no sampling)...")
-    X_full, y_full = model.prepare_sequences(data, apply_sampling=False, feature_set=feature_set)
+def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame) -> dict:
+    """Evaluate model on the full dataset."""
+    print("\nEvaluating on full dataset...")
     
-    debug_print(model.debug, "Making predictions on full dataset...")
+    # Prepare sequences from full dataset
+    X_full, y_full = model.prepare_sequences(data, apply_sampling=False)
+    
+    # Make predictions
     y_pred_proba = model.predict(X_full)
     
-    # Get ground truth windows
-    gt_windows = find_detection_windows(data, debug=model.debug)
+    # Calculate metrics
+    from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
     
-    # Standard evaluation
-    debug_print(model.debug, "\nPerforming standard evaluation...")
-    standard_results = model.evaluate(X_full, y_full)
+    # Try different thresholds to find the best F1 score
+    best_f1 = 0
+    best_threshold = 0.5
+    thresholds = np.linspace(0.3, 0.7, 41)
     
-    # Window-based evaluation
-    debug_print(model.debug, "\nPerforming window-based evaluation...")
-    window_results = model.evaluate_with_windows(standard_results, gt_windows, data)
+    for threshold in thresholds:
+        y_pred = (y_pred_proba >= threshold).astype(int)
+        f1 = f1_score(y_full, y_pred)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold = threshold
     
-    # Print both results
-    debug_print(model.debug, "\nStandard Evaluation Results:")
-    debug_print(model.debug, f"Precision: {standard_results['precision']:.4f}")
-    debug_print(model.debug, f"Recall: {standard_results['recall']:.4f}")
-    debug_print(model.debug, f"F1-Score: {standard_results['f1']:.4f}")
-    debug_print(model.debug, f"ROC-AUC: {standard_results['roc_auc']:.4f}")
-    debug_print(model.debug, f"PR-AUC: {standard_results['pr_auc']:.4f}")
+    # Use the best threshold for final evaluation
+    y_pred = (y_pred_proba >= best_threshold).astype(int)
     
-    debug_print(model.debug, "\nWindow-Based Evaluation Results:")
-    debug_print(model.debug, f"Precision: {window_results['original_metrics']['precision']:.4f}")
-    debug_print(model.debug, f"Recall: {window_results['original_metrics']['recall']:.4f}")
-    debug_print(model.debug, f"F1-Score: {window_results['original_metrics']['f1']:.4f}")
-    debug_print(model.debug, f"ROC-AUC: {window_results['original_metrics']['roc_auc']:.4f}")
-    debug_print(model.debug, f"PR-AUC: {window_results['original_metrics']['pr_auc']:.4f}")
+    precision = precision_score(y_full, y_pred)
+    recall = recall_score(y_full, y_pred)
+    f1 = f1_score(y_full, y_pred)
+    roc_auc = roc_auc_score(y_full, y_pred_proba)
+    pr_auc = average_precision_score(y_full, y_pred_proba)
     
     return {
-        'standard': standard_results,
-        'window_based': window_results
+        'standard': {
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'roc_auc': roc_auc,
+            'pr_auc': pr_auc,
+            'y_pred': y_pred,
+            'y_pred_proba': y_pred_proba,
+            'threshold': best_threshold,
+            'y_true': y_full
+        }
     }
 
 def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60, debug: bool = False):
@@ -1050,15 +973,12 @@ def main():
     parser.add_argument('--analyze', action='store_true', help='Analyze pressure patterns')
     parser.add_argument('--full_eval', action='store_true', help='Run evaluation on full dataset')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
-    parser.add_argument('--window_size', type=int, default=30, help='Size of the input window for the LSTM.')
+    parser.add_argument('--window_size', type=int, default=60, help='Size of the input window for the LSTM.')
     parser.add_argument('--model_name', type=str, default='lstm_model.h5', help='Name for the saved model file.')
-    parser.add_argument('--feature_set', type=str, default='shape', help="Feature set to use: 'shape' or 'statistical'")
     parser.add_argument('--use_artifacts', action='store_true', help='Include artifact windows as negative training examples')
     parser.add_argument('--artifact_ratio', type=float, default=0.5, help='Ratio of artifacts to include relative to vortex events (default: 0.5)')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training')
     parser.add_argument('--learning_rate', type=float, default=0.01, help='Learning rate for training (default: 0.01)')
-    parser.add_argument('--rf_importance', action='store_true', help='Run Random Forest feature importance analysis')
-    parser.add_argument('--rf_features', nargs='+', help='Specific features to analyze (by name or index). If not specified, all features are used.')
     args = parser.parse_args()
     
     print("Starting LSTM model training...")
@@ -1085,7 +1005,7 @@ def main():
     
     if args.analyze:
         print("\nAnalyzing pressure patterns...")
-        analyze_pressure_patterns(data, debug=args.debug)
+        analyze_pressure_patterns(data, window_size=args.window_size, debug=args.debug)
         return
     
     # Find all vortex events
@@ -1124,15 +1044,15 @@ def main():
     model = VortexLSTMModel(window_size=args.window_size, debug=args.debug)
     
     # Prepare sequences for each split
-    print(f"\nPreparing training sequences with '{args.feature_set}' features...")
-    X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True, feature_set=args.feature_set, 
+    print(f"\nPreparing training sequences with detrended pressure features...")
+    X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True, 
                                               use_artifacts=args.use_artifacts, artifact_ratio=args.artifact_ratio)
     
-    print(f"\nPreparing validation sequences with '{args.feature_set}' features...")
-    X_val, y_val = model.prepare_sequences(val_data, apply_sampling=False, feature_set=args.feature_set)
+    print(f"\nPreparing validation sequences with detrended pressure features...")
+    X_val, y_val = model.prepare_sequences(val_data, apply_sampling=False)
     
-    print(f"\nPreparing test sequences with '{args.feature_set}' features...")
-    X_test, y_test = model.prepare_sequences(test_data, apply_sampling=False, feature_set=args.feature_set)
+    print(f"\nPreparing test sequences with detrended pressure features...")
+    X_test, y_test = model.prepare_sequences(test_data, apply_sampling=False)
     
     # Print class distribution
     print("\nClass distribution in sets:")
@@ -1212,7 +1132,7 @@ def main():
     # Full dataset evaluation (optional)
     if args.full_eval:
         print("\nEvaluating model on full dataset...")
-        full_results = evaluate_on_full_dataset(model, data, args.feature_set)
+        full_results = evaluate_on_full_dataset(model, data)
         
         print("\nFull Dataset Performance:")
         print(f"Precision: {full_results['standard']['precision']:.4f}")
@@ -1257,455 +1177,8 @@ def main():
     # After triggered event evaluation in main()
     triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
 
-    # ... after test_results = model.evaluate(X_test, y_test)
-    # Save original predictions for pre-filter analysis
-    y_pred_pre_filter = test_results['y_pred'].copy()
-    y_pred_proba_pre_filter = test_results['y_pred_proba'].copy()
-
-    # Prepare for sharpest N-point drop analysis using correct detection patterns
-    window_starts = np.arange(model.window_size, len(test_data))
-    events = model.extract_event_ranges(test_data['gt_detection_win'].values, test_data['gt_fwhm'].values)
-    pattern_results = model.analyze_detection_patterns(test_results['y_pred'], window_starts, events, test_data)
-    successful_patterns = pattern_results['successful_patterns']
-    failed_patterns = pattern_results['failed_patterns']
-
-    # --- Sharpest N-Point Drop Analysis (Separate Chart) ---
-    plot_sharpest_n_point_drops(successful_patterns, failed_patterns)
-
-    # --- Sharp Drop Post-Processing Filter (Causal: -window_size to 0) ---
-    min_slope_threshold = -0.2  # You can adjust this threshold
-    X_test_pressure = X_test[:, :, 0]  # Assuming pressure is the first feature
-    y_pred_post_filter = y_pred_pre_filter.copy()
-    for i, pred in enumerate(y_pred_pre_filter):
-        if pred == 1:
-            # Only use the window up to the detection point (causal)
-            pressure_window = X_test_pressure[i]  # This is already -window_size:0 relative to detection
-            min_slope = np.min(np.diff(pressure_window))
-            if min_slope < min_slope_threshold:
-                y_pred_post_filter[i] = 0
-
-    # (If you want to add continued drop or other causal features, do so here using only pressure_window)
-
-    # --- Confidence Analysis Pre- and Post-Filtering ---
-    # Pre-filter confidence analysis
-    model.analyze_confidence_distribution(y_pred_pre_filter, y_pred_proba_pre_filter, window_starts, events, test_data)
-    import os
-    if os.path.exists('confidence_analysis.png'):
-        if os.path.exists('confidence_analysis_pre_filter.png'):
-            os.remove('confidence_analysis_pre_filter.png')
-        os.rename('confidence_analysis.png', 'confidence_analysis_pre_filter.png')
-
-    # Post-filter confidence analysis
-    model.analyze_confidence_distribution(y_pred_post_filter, y_pred_proba_pre_filter, window_starts, events, test_data)
-    if os.path.exists('confidence_analysis.png'):
-        if os.path.exists('confidence_analysis_post_filter.png'):
-            os.remove('confidence_analysis_post_filter.png')
-        os.rename('confidence_analysis.png', 'confidence_analysis_post_filter.png')
-
-    # --- Quantify performance change ---
-    from sklearn.metrics import precision_score, recall_score, f1_score
-    print("\n--- Performance Before Sharp Drop Filtering ---")
-    precision_pre = precision_score(y_test, y_pred_pre_filter, zero_division=0)
-    recall_pre = recall_score(y_test, y_pred_pre_filter, zero_division=0)
-    f1_pre = f1_score(y_test, y_pred_pre_filter, zero_division=0)
-    print(f"Precision: {precision_pre:.4f}")
-    print(f"Recall:    {recall_pre:.4f}")
-    print(f"F1-Score:  {f1_pre:.4f}")
-
-    print("\n--- Performance After Sharp Drop Filtering ---")
-    precision_post = precision_score(y_test, y_pred_post_filter, zero_division=0)
-    recall_post = recall_score(y_test, y_pred_post_filter, zero_division=0)
-    f1_post = f1_score(y_test, y_pred_post_filter, zero_division=0)
-    print(f"Precision: {precision_post:.4f}")
-    print(f"Recall:    {recall_post:.4f}")
-    print(f"F1-Score:  {f1_post:.4f}")
-
-    # --- Sweep through multiple sharp drop thresholds ---
-    thresholds = [-0.4, -0.35, -0.3, -0.25, -0.2]
-    print("\n--- Sharp Drop Threshold Sweep ---")
-    for thresh in thresholds:
-        y_pred_thresh = y_pred_pre_filter.copy()
-        for i, pred in enumerate(y_pred_pre_filter):
-            if pred == 1:
-                pressure_window = X_test_pressure[i]
-                min_slope = np.min(np.diff(pressure_window))
-                if min_slope < thresh:
-                    y_pred_thresh[i] = 0
-        precision = precision_score(y_test, y_pred_thresh, zero_division=0)
-        recall = recall_score(y_test, y_pred_thresh, zero_division=0)
-        f1 = f1_score(y_test, y_pred_thresh, zero_division=0)
-        print(f"Threshold: {thresh:5.2f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1-Score: {f1:.4f}")
-
-    # --- Confidence threshold sweep (pre- and post-sharp drop filtering) ---
-    conf_thresholds = np.arange(0.60, 0.75, 0.01)
-
-    print("\n--- Confidence Threshold Sweep (Pre-Sharp Drop Filtering) ---")
-    best_f1_pre = 0
-    best_thresh_pre = 0
-    for conf_thresh in conf_thresholds:
-        y_pred_conf = y_pred_pre_filter.copy()
-        for i, pred in enumerate(y_pred_pre_filter):
-            if pred == 1 and y_pred_proba_pre_filter[i] < conf_thresh:
-                y_pred_conf[i] = 0
-        precision = precision_score(y_test, y_pred_conf, zero_division=0)
-        recall = recall_score(y_test, y_pred_conf, zero_division=0)
-        f1 = f1_score(y_test, y_pred_conf, zero_division=0)
-        print(f"Conf Thresh: {conf_thresh:.2f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1-Score: {f1:.4f}")
-        if f1 > best_f1_pre:
-            best_f1_pre = f1
-            best_thresh_pre = conf_thresh
-    print(f"\nBest F1-Score (Pre-Sharp Drop): {best_f1_pre:.4f} at confidence threshold {best_thresh_pre:.2f}")
-
-    print("\n--- Confidence Threshold Sweep (Post-Sharp Drop Filtering, -0.35) ---")
-    best_f1_post = 0
-    best_thresh_post = 0
-    # Apply sharp drop filter at -0.35 first
-    y_pred_sharp = y_pred_pre_filter.copy()
-    for i, pred in enumerate(y_pred_pre_filter):
-        if pred == 1:
-            pressure_window = X_test_pressure[i]
-            min_slope = np.min(np.diff(pressure_window))
-            if min_slope < -0.35:
-                y_pred_sharp[i] = 0
-    for conf_thresh in conf_thresholds:
-        y_pred_conf = y_pred_sharp.copy()
-        for i, pred in enumerate(y_pred_sharp):
-            if pred == 1 and y_pred_proba_pre_filter[i] < conf_thresh:
-                y_pred_conf[i] = 0
-        precision = precision_score(y_test, y_pred_conf, zero_division=0)
-        recall = recall_score(y_test, y_pred_conf, zero_division=0)
-        f1 = f1_score(y_test, y_pred_conf, zero_division=0)
-        print(f"Conf Thresh: {conf_thresh:.2f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1-Score: {f1:.4f}")
-        if f1 > best_f1_post:
-            best_f1_post = f1
-            best_thresh_post = conf_thresh
-    print(f"\nBest F1-Score (Post-Sharp Drop): {best_f1_post:.4f} at confidence threshold {best_thresh_post:.2f}")
-
-    # --- Continued Drop Analysis (Sharp Drop Artifact Detection) ---
-    continued_slope_successful = []
-    continued_slope_failed = []
-    total_drop_successful = []
-    total_drop_failed = []
-    consecutive_neg_successful = []
-    consecutive_neg_failed = []
-    drop_after_sharpest_successful = []
-    drop_after_sharpest_failed = []
-    lookahead = 5
-    total_drop_after_initial_successful = []
-    total_drop_after_initial_failed = []
-    # Existing feature extraction loop
-    for patterns, continued_slope, total_drop, consecutive_neg, drop_after_sharpest, total_drop_after_initial in [
-        (successful_patterns, continued_slope_successful, total_drop_successful, consecutive_neg_successful, drop_after_sharpest_successful, total_drop_after_initial_successful),
-        (failed_patterns, continued_slope_failed, total_drop_failed, consecutive_neg_failed, drop_after_sharpest_failed, total_drop_after_initial_failed)
-    ]:
-        for p in patterns:
-            diffs = np.diff(p)
-            sharp_idx = np.argmin(diffs)
-            # 1. Slope after sharpest drop
-            after = p[sharp_idx+1:sharp_idx+1+lookahead]
-            before = p[sharp_idx]
-            if len(after) > 0:
-                continued_slope.append((after[-1] - before) / len(after))
-            else:
-                continued_slope.append(0)
-            # 2. Total drop over window
-            total_drop.append(p[-1] - p[0])
-            # 3. Number of consecutive negative slopes after sharpest drop
-            neg_count = 0
-            for d in diffs[sharp_idx+1:]:
-                if d < 0:
-                    neg_count += 1
-                else:
-                    break
-            consecutive_neg.append(neg_count)
-            # 4. Total drop after sharpest drop
-            drop_after_value = p[-1] - p[sharp_idx]
-            drop_after_sharpest.append(drop_after_value)
-            # 5. Total drop after initial drop
-            if np.any(diffs < 0):
-                initial_drop_idx = np.argmax(diffs < 0)
-                drop_after_initial = p[-1] - p[initial_drop_idx]
-            else:
-                drop_after_initial = 0
-            total_drop_after_initial.append(drop_after_initial)
-
-    # Calculate bin ranges for 0.1 width
-    # def get_bins(data1, data2, width=0.1):
-    #     min_val = min(np.min(data1), np.min(data2))
-    #     max_val = max(np.max(data1), np.max(data2))
-    #     return np.arange(np.floor(min_val), np.ceil(max_val) + width, width)
-
-    # Plot continued drop analysis using the plotting module
-    plot_continued_drop_analysis(continued_slope_successful, continued_slope_failed,
-                               total_drop_successful, total_drop_failed,
-                               consecutive_neg_successful, consecutive_neg_failed,
-                               drop_after_sharpest_successful, drop_after_sharpest_failed,
-                               total_drop_after_initial_successful, total_drop_after_initial_failed,
-                               lookahead)
-
-    # --- Post-processing filters: Only keep detections that pass BOTH filters ---
-    # 1. total drop after initial drop > 0.1
-    # 2. avg slope after sharpest drop < -0.3
-    # These lists are in the same order as y_pred_pre_filter (i.e., for predicted positives)
-    # We'll need to recompute these features for all test windows, not just for plotting
-
-    # First, recompute features for all test windows (not just successful/failed)
-    avg_slope_after_sharpest = []
-    total_drop_after_initial = []
-    for p in X_test_pressure:
-        diffs = np.diff(p)
-        # Avg slope after sharpest drop
-        sharp_idx = np.argmin(diffs)
-        after = p[sharp_idx+1:sharp_idx+1+lookahead]
-        before = p[sharp_idx]
-        if len(after) > 0:
-            avg_slope = (after[-1] - before) / len(after)
-        else:
-            avg_slope = 0
-        avg_slope_after_sharpest.append(avg_slope)
-        # Total drop after initial drop
-        if np.any(diffs < 0):
-            initial_drop_idx = np.argmax(diffs < 0)
-            drop_after_initial = p[-1] - p[initial_drop_idx]
-        else:
-            drop_after_initial = 0
-        total_drop_after_initial.append(drop_after_initial)
-
-    avg_slope_after_sharpest = np.array(avg_slope_after_sharpest)
-    total_drop_after_initial = np.array(total_drop_after_initial)
-
-    print(f"Detections before post-processing filters: {np.sum(y_pred_pre_filter)}")
-
-    # Compute total drop after sharpest drop for all windows
-    total_drop_after_sharpest = []
-    for p in X_test_pressure:
-        diffs = np.diff(p)
-        sharp_idx = np.argmin(diffs)
-        drop_after_sharpest = p[-1] - p[sharp_idx]
-        total_drop_after_sharpest.append(drop_after_sharpest)
-    total_drop_after_sharpest = np.array(total_drop_after_sharpest)
-
-    # Apply filters
-    y_pred_post_filter = y_pred_pre_filter.copy()
-    # Filter 1: total drop after initial drop > 0.1
-    for i, pred in enumerate(y_pred_post_filter):
-        if pred == 1 and not (total_drop_after_initial[i] < 0.1):
-            y_pred_post_filter[i] = 0
-    print(f"After total drop after initial drop > 0.1: {np.sum(y_pred_post_filter)} detections remain.")
-    # Filter 2: avg slope after sharpest drop > -0.3
-    for i, pred in enumerate(y_pred_post_filter):
-        if pred == 1 and not (avg_slope_after_sharpest[i] > -0.3):
-            y_pred_post_filter[i] = 0
-    print(f"After avg slope after sharpest drop > -0.3: {np.sum(y_pred_post_filter)} detections remain.")
-    # Filter 3: total drop after sharpest drop >= -0.75
-    for i, pred in enumerate(y_pred_post_filter):
-        if pred == 1 and total_drop_after_sharpest[i] < -0.75:
-            y_pred_post_filter[i] = 0
-    print(f"After total drop after sharpest drop >= -0.75: {np.sum(y_pred_post_filter)} detections remain.")
-
-    # --- Post-filter continued drop analysis plots (aligned) ---
-    kept_indices = [i for i, pred in enumerate(y_pred_post_filter) if pred == 1]
-    successful_patterns_post = []
-    failed_patterns_post = []
-    total_drop_after_initial_successful_post = []
-    total_drop_after_initial_failed_post = []
-    total_drop_after_sharpest_successful_post = []
-    total_drop_after_sharpest_failed_post = []
-    continued_slope_successful_post = []
-    continued_slope_failed_post = []
-    total_drop_successful_post = []
-    total_drop_failed_post = []
-    consecutive_neg_successful_post = []
-    consecutive_neg_failed_post = []
-    drop_after_sharpest_successful_post = []
-    drop_after_sharpest_failed_post = []
-    for idx in kept_indices:
-        detection_idx = window_starts[idx]
-        # Get pressure pattern ending at detection (causal)
-        start_idx = max(0, detection_idx - model.window_size)
-        end_idx = detection_idx + 1  # inclusive of detection point
-        pressure_pattern = test_data['PRESSURE'].iloc[start_idx:end_idx].values
-        if len(pressure_pattern) == model.window_size + 1:
-            # Use the same event logic as analyze_detection_patterns
-            point_to_event_map = {}
-            for event_idx, (start, end) in enumerate(events):
-                for i in range(start, end + 1):
-                    point_to_event_map[i] = event_idx
-            if detection_idx in point_to_event_map:
-                successful_patterns_post.append(pressure_pattern)
-                total_drop_after_initial_successful_post.append(total_drop_after_initial[idx])
-                total_drop_after_sharpest_successful_post.append(total_drop_after_sharpest[idx])
-            else:
-                failed_patterns_post.append(pressure_pattern)
-                total_drop_after_initial_failed_post.append(total_drop_after_initial[idx])
-                total_drop_after_sharpest_failed_post.append(total_drop_after_sharpest[idx])
-    # Now compute the other features for these patterns
-    lookahead = 5
-    for patterns, continued_slope, total_drop, consecutive_neg, drop_after_sharpest in [
-        (successful_patterns_post, continued_slope_successful_post, total_drop_successful_post, consecutive_neg_successful_post, drop_after_sharpest_successful_post),
-        (failed_patterns_post, continued_slope_failed_post, total_drop_failed_post, consecutive_neg_failed_post, drop_after_sharpest_failed_post)
-    ]:
-        for p in patterns:
-            diffs = np.diff(p)
-            sharp_idx = np.argmin(diffs)
-            after = p[sharp_idx+1:sharp_idx+1+lookahead]
-            before = p[sharp_idx]
-            if len(after) > 0:
-                continued_slope.append((after[-1] - before) / len(after))
-            else:
-                continued_slope.append(0)
-            total_drop.append(p[-1] - p[0])
-            neg_count = 0
-            for d in diffs[sharp_idx+1:]:
-                if d < 0:
-                    neg_count += 1
-                else:
-                    break
-            consecutive_neg.append(neg_count)
-            drop_after_value = p[-1] - p[sharp_idx]
-            drop_after_sharpest.append(drop_after_value)
-    # Debug prints for misalignment (should now be zero)
-    print("\n[DEBUG] Post-filter analysis (aligned):")
-    print("len(y_pred_post_filter):", len(y_pred_post_filter))
-    print("len(window_starts):", len(window_starts))
-    print("len(failed_patterns_post):", len(failed_patterns_post))
-    print("Max total_drop_after_initial_failed_post:", np.max(total_drop_after_initial_failed_post) if len(total_drop_after_initial_failed_post) > 0 else 'N/A')
-    print("Num with value >= 0.1:", np.sum(np.array(total_drop_after_initial_failed_post) >= 0.1) if len(total_drop_after_initial_failed_post) > 0 else 'N/A')
-    bad_indices = np.where(np.array(total_drop_after_initial_failed_post) >= 0.1)[0]
-    if len(bad_indices) > 0:
-        print("Indices and values of failed detections with total_drop_after_initial >= 0.1:")
-        for idx in bad_indices:
-            print(f"  Index: {idx}, Value: {total_drop_after_initial_failed_post[idx]}")
-    else:
-        print("No failed detections with total_drop_after_initial >= 0.1 found.")
-
-    plot_continued_drop_analysis(
-        continued_slope_successful_post, continued_slope_failed_post,
-        total_drop_successful_post, total_drop_failed_post,
-        consecutive_neg_successful_post, consecutive_neg_failed_post,
-        drop_after_sharpest_successful_post, drop_after_sharpest_failed_post,
-        total_drop_after_initial_successful_post, total_drop_after_initial_failed_post,
-        lookahead,
-        suffix="_post_filter"
-    )
-
-    # --- Post-filter total drop after sharpest drop analysis plot ---
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10, 8))
-    plt.hist(total_drop_after_sharpest_successful_post, bins=30, alpha=0.7, label='Successful', color='green')
-    plt.hist(total_drop_after_sharpest_failed_post, bins=30, alpha=0.7, label='Failed', color='red')
-    plt.title('Total Drop After Sharpest Drop_post_filter')
-    plt.xlabel('Total Drop (end - sharpest)')
-    plt.ylabel('Count')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig('continued_drop_analysis_total_drop_after_sharpest_post_filter.png')
-    plt.close()
-
-    # --- Combined Sharp Drop + New Filters Post-Processing ---
-    print("\n--- Combined Sharp Drop + New Filters Post-Processing ---")
-    thresholds = {
-        'sharp_drop': -0.35,
-        'total_drop_after_initial': 0.1,
-        'avg_slope_after_sharpest': -0.3
-    }
-    y_pred_combined_filter = feature_engineering.apply_postprocessing_filters(
-        y_pred_pre_filter, X_test_pressure, y_pred_proba_pre_filter, thresholds, lookahead=5
-    )
-    # --- Performance analysis for combined filters ---
-    print("\n--- Performance After Combined Filters ---")
-    compute_classification_metrics(y_test, y_pred_combined_filter)
-
-    # --- Confidence threshold sweep after combined filters ---
-    print("\n--- Confidence Threshold Sweep (After Combined Filters) ---")
-    thresholds_range = np.arange(0.1, 0.91, 0.01)
-    sweep_confidence_thresholds(y_test, y_pred_combined_filter, y_pred_proba_pre_filter, thresholds_range)
-
-    # --- Find best threshold for total_drop_after_sharpest ---
-    best_f1 = 0
-    best_thresh = None
-    best_y_pred = None
-    from sklearn.metrics import precision_score, recall_score, f1_score
-    sweep_range = np.arange(-1.5, 0.01, 0.05)
-    for thresh in sweep_range:
-        y_pred_temp = y_pred_pre_filter.copy()
-        # Apply all previous filters
-        for i, pred in enumerate(y_pred_temp):
-            if pred == 1 and not (total_drop_after_initial[i] < 0.1):
-                y_pred_temp[i] = 0
-        for i, pred in enumerate(y_pred_temp):
-            if pred == 1 and not (avg_slope_after_sharpest[i] > -0.3):
-                y_pred_temp[i] = 0
-        # Now apply the threshold sweep for total_drop_after_sharpest
-        for i, pred in enumerate(y_pred_temp):
-            if pred == 1 and total_drop_after_sharpest[i] < thresh:
-                y_pred_temp[i] = 0
-        f1 = f1_score(y_test, y_pred_temp, zero_division=0)
-        if f1 > best_f1:
-            best_f1 = f1
-            best_thresh = thresh
-            best_y_pred = y_pred_temp.copy()
-    print(f"\nBest F1-score after all filters: {best_f1:.4f} at total_drop_after_sharpest threshold {best_thresh:.2f}")
-    # Use the best filter for subsequent post-filter analysis
-    y_pred_post_filter = best_y_pred
-
     # At the end, after all evaluation and visualization:
-    if args.rf_importance:
-        print("\nRunning Random Forest feature importance analysis...")
-        print(f"Using feature set: {args.feature_set}")
-        n_samples, window_size, n_features = X_test.shape
-        if args.feature_set == 'shape':
-            base_feature_names = ['pressure', 'acceleration', 'slope_std', 'normalized_pressure_std']
-        elif args.feature_set == 'statistical':
-            base_feature_names = ['pressure', 'skewness', 'kurtosis']
-        else:
-            base_feature_names = [f'feature_{i}' for i in range(n_features)]
-        statistics = [
-            ('mean', np.mean),
-            ('std', np.std),
-            ('min', np.min),
-            ('max', np.max),
-            ('q25', lambda x: np.percentile(x, 25)),
-            ('q75', lambda x: np.percentile(x, 75)),
-            ('median', np.median),
-            ('range', lambda x: np.max(x) - np.min(x)),
-            ('iqr', lambda x: np.percentile(x, 75) - np.percentile(x, 25)),
-        ]
-        from tqdm import tqdm
-        print(f"Processing {n_samples} samples for RF feature importance analysis...")
-        print("[DEBUG] Entering tqdm feature extraction loop...")
-        rf_features = []
-        rf_feature_names = []
-        for i in tqdm(range(n_samples), desc="Extracting features"):
-            sample_features = []
-            for feat_idx in range(n_features):
-                feature_values = X_test[i, :, feat_idx]
-                for stat_name, stat_func in statistics:
-                    sample_features.append(stat_func(feature_values))
-            rf_features.append(sample_features)
-            if i == 0:
-                for feat_name in base_feature_names:
-                    for stat_name, _ in statistics:
-                        rf_feature_names.append(f'{feat_name}_{stat_name}')
-        print("[DEBUG] Exited tqdm feature extraction loop.")
-        X_2d = np.array(rf_features)
-        print(f"Feature matrix shape: {X_2d.shape}")
-        print(f"Number of features: {len(rf_feature_names)}")
-        print(f"Features: {rf_feature_names}")
-        rf_importances, rf_feature_names_used, rf_performance = compute_rf_feature_importance(
-            X_2d, y_test, 
-            feature_names=rf_feature_names,
-            selected_features=args.rf_features,
-            balance_classes=False,  # Use test data as-is (like LSTM test evaluation)
-            original_data=test_data  # Pass original data (not used when balance_classes=False)
-        )
-        
-        print(f"\nRF Analysis Summary:")
-        print(f"ROC-AUC: {rf_performance['roc_auc']:.4f}")
-        print(f"PR-AUC: {rf_performance['pr_auc']:.4f}")
-        print(f"Test samples: {rf_performance['test_samples']}")
-        print(f"Balanced sampling: {rf_performance['balanced']}")
+    # Note: Post-processing filters and complex analysis removed for simplified approach
 
 if __name__ == "__main__":
     main() 
