@@ -1,5 +1,8 @@
 import pandas as pd
+<<<<<<< HEAD
 import numpy as np
+=======
+>>>>>>> origin/2Stage_LSTM
 import sys
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
@@ -7,6 +10,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras import mixed_precision
+<<<<<<< HEAD
 from sklearn.preprocessing import MinMaxScaler
 from pathlib import Path
 import time
@@ -21,6 +25,24 @@ mixed_precision.set_global_policy("mixed_float16")
 
 
 
+=======
+from pathlib import Path
+import time
+import argparse
+import tensorflow.keras.backend as K
+from tensorflow.keras.regularizers import l2
+import numpy as np
+from evaluation_utils import compute_classification_metrics, sweep_confidence_thresholds
+from plotting_utils import (plot_confidence_distribution, plot_confidence_timeline, 
+                           plot_detection_patterns, plot_confidence_analysis, 
+                           plot_pressure_patterns, plot_training_history)
+
+# Import artifact detector
+from artifact_detector import ArtifactDetector
+print("Using GPU:", tf.config.list_physical_devices('GPU'))
+mixed_precision.set_global_policy("mixed_float16")
+
+>>>>>>> origin/2Stage_LSTM
 # Add utils directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent.parent / 'utils'))
 from visualize_lstm_metrics import visualize_lstm_metrics, create_lstm_report
@@ -44,7 +66,12 @@ class VortexLSTMModel:
         """Print debug information if debug flag is set."""
         debug_print(self.debug, *args, **kwargs)
         
+<<<<<<< HEAD
     def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, feature_set: str = 'shape') -> tuple:
+=======
+    def prepare_sequences(self, data: pd.DataFrame, apply_sampling: bool = True, 
+                         use_artifacts: bool = False, artifact_ratio: float = 0.5) -> tuple:
+>>>>>>> origin/2Stage_LSTM
         """
         Prepare sequences for vortex prediction using local detrending.
         Each window is normalized independently to make features invariant
@@ -55,7 +82,12 @@ class VortexLSTMModel:
             data: Input data
             apply_sampling: If True, creates balanced dataset from vortex events.
                           If False, processes all available data using a sliding window.
+<<<<<<< HEAD
             feature_set: 'shape' for (pressure, acceleration) or 'statistical' for (pressure, skew, kurtosis)
+=======
+            use_artifacts: If True, include artifact windows as negative training examples
+            artifact_ratio: Ratio of artifacts to include relative to vortex events
+>>>>>>> origin/2Stage_LSTM
         """
         pressure_values = data['PRESSURE'].values
         gt_detection = data['gt_detection_win'].values
@@ -75,6 +107,7 @@ class VortexLSTMModel:
                 local_mean = np.mean(pressure_window)
                 detrended_pressure = pressure_window - local_mean
                 
+<<<<<<< HEAD
                 # 3. Calculate features based on the chosen set
                 if feature_set == 'shape':
                     acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
@@ -88,6 +121,12 @@ class VortexLSTMModel:
                     raise ValueError("feature_set must be 'shape' or 'statistical'")
                 
                 # 6. Determine the label for the window
+=======
+                # 3. Reshape for LSTM: (window_size, 1) - single feature
+                sequence = detrended_pressure.reshape(-1, 1)
+                
+                # 4. Determine the label for the window
+>>>>>>> origin/2Stage_LSTM
                 label = 1 if np.any(gt_detection[i-self.window_size:i] == 1) else 0
                 sequences_list.append(sequence)
                 labels_list.append(label)
@@ -108,6 +147,7 @@ class VortexLSTMModel:
                     local_mean = np.mean(pressure_window)
                     detrended_pressure = pressure_window - local_mean
                     
+<<<<<<< HEAD
                     if feature_set == 'shape':
                         acceleration = np.diff(detrended_pressure, n=2, prepend=[detrended_pressure[0], detrended_pressure[0]])
                         sequence = np.stack([detrended_pressure, acceleration], axis=1)
@@ -117,6 +157,10 @@ class VortexLSTMModel:
                         kurtosis = rolling_series.rolling(window=20, min_periods=1).kurt().fillna(0).values
                         sequence = np.stack([detrended_pressure, skewness, kurtosis], axis=1)
 
+=======
+                    # Reshape for LSTM: (window_size, 1) - single feature
+                    sequence = detrended_pressure.reshape(-1, 1)
+>>>>>>> origin/2Stage_LSTM
                     sequences_list.append(sequence)
                     labels_list.append(1)
 
@@ -131,6 +175,7 @@ class VortexLSTMModel:
                     local_mean_neg = np.mean(pressure_window_neg)
                     detrended_pressure_neg = pressure_window_neg - local_mean_neg
                     
+<<<<<<< HEAD
                     if feature_set == 'shape':
                         acceleration_neg = np.diff(detrended_pressure_neg, n=2, prepend=[detrended_pressure_neg[0], detrended_pressure_neg[0]])
                         sequence_neg = np.stack([detrended_pressure_neg, acceleration_neg], axis=1)
@@ -140,17 +185,52 @@ class VortexLSTMModel:
                         kurtosis_neg = rolling_series_neg.rolling(window=20, min_periods=1).kurt().fillna(0).values
                         sequence_neg = np.stack([detrended_pressure_neg, skewness_neg, kurtosis_neg], axis=1)
 
+=======
+                    # Reshape for LSTM: (window_size, 1) - single feature
+                    sequence_neg = detrended_pressure_neg.reshape(-1, 1)
+>>>>>>> origin/2Stage_LSTM
                     sequences_list.append(sequence_neg)
                     labels_list.append(0)
 
             self.debug_print("\nBalanced data statistics (after local detrending):")
             self.debug_print(f"Total sequences: {len(sequences_list)}")
             self.debug_print(f"Vortex sequences: {sum(labels_list)}")
+<<<<<<< HEAD
+=======
+            
+            # Add artifact windows if requested
+            if use_artifacts:
+                self.debug_print("\nAdding artifact windows as negative training examples...")
+                artifact_detector = ArtifactDetector(window_size=self.window_size)
+                X_artifacts, y_artifacts = artifact_detector.prepare_artifact_training_data(data, artifact_ratio)
+                
+                if len(X_artifacts) > 0:
+                    # Convert artifact sequences to match simplified format (single feature)
+                    artifact_sequences = []
+                    for artifact in X_artifacts:
+                        # Artifacts are already detrended pressure, just reshape to single feature
+                        detrended_pressure = artifact[:, 0]  # First channel is pressure
+                        artifact_single_feature = detrended_pressure.reshape(-1, 1)
+                        artifact_sequences.append(artifact_single_feature)
+                    
+                    # Add artifacts to sequences
+                    sequences_list.extend(artifact_sequences)
+                    labels_list.extend(y_artifacts)
+                    
+                    self.debug_print(f"Added {len(artifact_sequences)} artifact sequences")
+                    self.debug_print(f"Updated total sequences: {len(sequences_list)}")
+                    self.debug_print(f"Updated vortex sequences: {sum(labels_list)}")
+                else:
+                    self.debug_print("No artifacts detected in this dataset")
+>>>>>>> origin/2Stage_LSTM
 
         sequences = np.array(sequences_list)
         labels = np.array(labels_list)
         
+<<<<<<< HEAD
         # We no longer return normalization stats
+=======
+>>>>>>> origin/2Stage_LSTM
         return sequences, labels
         
     def temporal_focal_loss(self, gamma=1.5, alpha=None, temporal_weight=0.1):
@@ -206,7 +286,11 @@ class VortexLSTMModel:
         
         return alpha
     
+<<<<<<< HEAD
     def build_model(self, input_shape: tuple, alpha: float = None, gamma: float = 1.5):
+=======
+    def build_model(self, input_shape: tuple, alpha: float = None, gamma: float = 1.5, learning_rate: float = 0.01):
+>>>>>>> origin/2Stage_LSTM
         """Build the vortex prediction model with Bidirectional LSTM and temporal loss."""
         model = Sequential([
             Bidirectional(
@@ -222,7 +306,11 @@ class VortexLSTMModel:
         ])
         
         model.compile(
+<<<<<<< HEAD
             optimizer=Adam(learning_rate=0.001),
+=======
+            optimizer=Adam(learning_rate=learning_rate),
+>>>>>>> origin/2Stage_LSTM
             loss=self.temporal_focal_loss(gamma=gamma, alpha=alpha, temporal_weight=0.4),
             metrics=['accuracy', 
                     tf.keras.metrics.AUC(curve='ROC', name='roc_auc'),
@@ -254,7 +342,11 @@ class VortexLSTMModel:
         
         return {0: weight_negative, 1: weight_positive}
 
+<<<<<<< HEAD
     def train(self, X_train, y_train, X_val, y_val, X_test, y_test, epochs=50, batch_size=256):
+=======
+    def train(self, X_train, y_train, X_val, y_val, X_test, y_test, epochs=50, batch_size=256, learning_rate=0.01):
+>>>>>>> origin/2Stage_LSTM
         """Train the model with temporal-aware focal loss and class weights."""
         # Print statistics about the data
         self.debug_print("\nTraining Data Statistics:")
@@ -273,7 +365,11 @@ class VortexLSTMModel:
         self.debug_print("\nTraining vortex prediction model...")
         # The input shape will now depend on the feature set
         num_features = X_train.shape[2]
+<<<<<<< HEAD
         self.model = self.build_model((self.window_size, num_features), alpha=alpha, gamma=1.5)
+=======
+        self.model = self.build_model((self.window_size, num_features), alpha=alpha, gamma=1.5, learning_rate=learning_rate)
+>>>>>>> origin/2Stage_LSTM
         
         # Add learning rate scheduler with adjusted patience
         reduce_lr = ReduceLROnPlateau(
@@ -317,6 +413,7 @@ class VortexLSTMModel:
         """Make predictions using the model."""
         return self.model.predict(X).flatten()
     
+<<<<<<< HEAD
     def predict_real_time(self, pressure_readings: np.ndarray) -> float:
         """Make real-time predictions on new pressure readings."""
         if len(pressure_readings) < self.window_size:
@@ -328,6 +425,8 @@ class VortexLSTMModel:
         sequence = current_readings.reshape(1, self.window_size, current_readings.shape[1])
         return self.model.predict(sequence)[0][0]
     
+=======
+>>>>>>> origin/2Stage_LSTM
     def evaluate(self, X_test, y_test):
         """Evaluate model performance."""
         from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
@@ -460,7 +559,11 @@ class VortexLSTMModel:
 
     def analyze_detection_patterns(self, y_pred, window_starts, events, test_data):
         """Analyze pressure patterns around successful vs failed detections."""
+<<<<<<< HEAD
         import matplotlib.pyplot as plt
+=======
+        # import matplotlib.pyplot as plt  # Moved to plotting_utils.py
+>>>>>>> origin/2Stage_LSTM
         
         # Create lookup for true events
         point_to_event_map = {}
@@ -474,12 +577,17 @@ class VortexLSTMModel:
         successful_sclks = []
         failed_sclks = []
         
+<<<<<<< HEAD
         window_size = 60  # Look at 60 points before and after detection
         
+=======
+        window_size = self.window_size
+>>>>>>> origin/2Stage_LSTM
         for i, prediction in enumerate(y_pred):
             if prediction == 1:  # Positive prediction
                 detection_idx = window_starts[i]
                 detection_sclk = test_data['SCLK'].iloc[detection_idx]
+<<<<<<< HEAD
                 
                 # Get pressure pattern around this detection
                 start_idx = max(0, detection_idx - window_size)
@@ -496,12 +604,49 @@ class VortexLSTMModel:
                     failed_sclks.append(detection_sclk)
         
         # Convert to arrays
+=======
+                # Get pressure pattern ending at detection (causal)
+                start_idx = max(0, detection_idx - window_size)
+                end_idx = detection_idx + 1  # inclusive of detection point
+                pressure_pattern = test_data['PRESSURE'].iloc[start_idx:end_idx].values
+                if len(pressure_pattern) == window_size + 1:
+                    if detection_idx in point_to_event_map:
+                        successful_patterns.append(pressure_pattern)
+                        successful_sclks.append(detection_sclk)
+                    else:
+                        failed_patterns.append(pressure_pattern)
+                        failed_sclks.append(detection_sclk)
+        # Update time_points for plotting to np.arange(-window_size, 1)
+        time_points = np.arange(-window_size, 1)
+        # All subsequent pattern analysis, continued drop analysis, and plots should use these causal patterns and time_points.
+        # In continued drop analysis, use only these causal patterns as well.
+        
+        # Convert to arrays (after all appends)
+>>>>>>> origin/2Stage_LSTM
         successful_patterns = np.array(successful_patterns)
         failed_patterns = np.array(failed_patterns)
         
         print(f"\n[PATTERN ANALYSIS] Successful detections: {len(successful_patterns)}")
         print(f"[PATTERN ANALYSIS] False alarms: {len(failed_patterns)}")
         
+<<<<<<< HEAD
+=======
+        # Analyze statistical differences between patterns
+        if len(successful_patterns) > 0 and len(failed_patterns) > 0:
+            from pattern_analysis import analyze_pattern_statistics, find_best_thresholds
+            
+            print("\n[PATTERN ANALYSIS] Analyzing statistical differences...")
+            stats = analyze_pattern_statistics(successful_patterns, failed_patterns)
+            thresholds = find_best_thresholds(stats)
+            
+            # Store the best discriminative features for potential use in artifact detection
+            if thresholds:
+                best_feature = max(thresholds.keys(), key=lambda k: thresholds[k]['f1_score'])
+                best_f1 = thresholds[best_feature]['f1_score']
+                print(f"\n[PATTERN ANALYSIS] Best discriminative feature: {best_feature} (F1={best_f1:.3f})")
+                print(f"[PATTERN ANALYSIS] This could be used to improve artifact detection!")
+        
+>>>>>>> origin/2Stage_LSTM
         if len(successful_patterns) > 0 and len(failed_patterns) > 0:
             # Calculate statistics
             mean_successful = np.mean(successful_patterns, axis=0)
@@ -513,6 +658,7 @@ class VortexLSTMModel:
             print(f"[PATTERN ANALYSIS] Mean pressure in failed patterns: {np.mean(mean_failed):.2f} ± {np.mean(std_failed):.2f}")
             print(f"[PATTERN ANALYSIS] Pressure difference: {np.mean(mean_successful - mean_failed):.2f}")
             
+<<<<<<< HEAD
             # Plot patterns
             plt.figure(figsize=(15, 10))
             
@@ -565,6 +711,42 @@ class VortexLSTMModel:
             plt.tight_layout()
             plt.savefig('detection_patterns.png')
             plt.close()
+=======
+            # Calculate minimum slope (sharpest drop) for each pattern
+            min_slope_successful = [np.min(np.diff(p)) for p in successful_patterns]
+            min_slope_failed = [np.min(np.diff(p)) for p in failed_patterns]
+
+            # 6. Sharpest short-window slope (max negative difference over 3 consecutive points)
+            def max_short_window_slope(pattern, window=3):
+                return np.min([pattern[i+window-1] - pattern[i] for i in range(len(pattern)-window+1)])
+            short_window_slope_successful = [max_short_window_slope(p, window=3) for p in successful_patterns]
+            short_window_slope_failed = [max_short_window_slope(p, window=3) for p in failed_patterns]
+
+            # 7. Drop duration (number of points from start to end of main drop)
+            def drop_duration(pattern, threshold=0.1):
+                # Find the largest drop in the pattern
+                diffs = np.diff(pattern)
+                min_idx = np.argmin(diffs)
+                # Go backwards to find where the drop started
+                start = min_idx
+                while start > 0 and diffs[start] < -threshold:
+                    start -= 1
+                # Go forwards to find where the drop ended
+                end = min_idx
+                while end < len(diffs)-1 and diffs[end] < -threshold:
+                    end += 1
+                return end - start + 1
+
+            # Use a threshold of 0.1 for what counts as a drop
+            sharp_drop_duration_successful = [drop_duration(p, threshold=0.1) for p in successful_patterns]
+            sharp_drop_duration_failed = [drop_duration(p, threshold=0.1) for p in failed_patterns]
+
+            # Plot detection patterns using the plotting module
+            plot_detection_patterns(successful_patterns, failed_patterns, successful_sclks, failed_sclks,
+                                  min_slope_successful, min_slope_failed, short_window_slope_successful, 
+                                  short_window_slope_failed, sharp_drop_duration_successful, sharp_drop_duration_failed,
+                                  time_points, mean_successful, mean_failed, std_successful, std_failed)
+>>>>>>> origin/2Stage_LSTM
             
             print(f"[PATTERN ANALYSIS] Pattern analysis saved to detection_patterns.png")
         
@@ -577,7 +759,11 @@ class VortexLSTMModel:
 
     def analyze_confidence_distribution(self, y_pred, y_pred_proba, window_starts, events, test_data):
         """Analyze confidence scores for successful vs failed detections."""
+<<<<<<< HEAD
         import matplotlib.pyplot as plt
+=======
+        # import matplotlib.pyplot as plt  # Moved to plotting_utils.py
+>>>>>>> origin/2Stage_LSTM
         
         # Create lookup for true events
         point_to_event_map = {}
@@ -614,6 +800,7 @@ class VortexLSTMModel:
         if len(successful_confidences) > 0 and len(failed_confidences) > 0:
             print(f"[CONFIDENCE ANALYSIS] Confidence difference: {np.mean(successful_confidences) - np.mean(failed_confidences):.4f}")
             
+<<<<<<< HEAD
             # Plot confidence distributions
             plt.figure(figsize=(12, 5))
             
@@ -647,6 +834,10 @@ class VortexLSTMModel:
             plt.tight_layout()
             plt.savefig('confidence_analysis.png')
             plt.close()
+=======
+            # Plot confidence analysis using the plotting module
+            plot_confidence_analysis(successful_confidences, failed_confidences)
+>>>>>>> origin/2Stage_LSTM
             
             print(f"[CONFIDENCE ANALYSIS] Confidence analysis saved to confidence_analysis.png")
             
@@ -655,6 +846,10 @@ class VortexLSTMModel:
                 # Find threshold that maximizes successful while minimizing failed
                 best_ratio = 0
                 best_threshold = 0.5
+<<<<<<< HEAD
+=======
+                thresholds = np.linspace(0.1, 0.9, 81)
+>>>>>>> origin/2Stage_LSTM
                 
                 for threshold in thresholds:
                     successful_above = np.sum(successful_confidences >= threshold)
@@ -673,6 +868,98 @@ class VortexLSTMModel:
             'failed_confidences': failed_confidences
         }
 
+<<<<<<< HEAD
+=======
+    def evaluate_triggered_pointwise(self, y_pred, test_data):
+        """
+        Evaluate using a custom 'latch-on' pointwise logic.
+        Once an event is 'triggered' by a positive prediction, all subsequent points
+        within that true event are counted as True Positives.
+        """
+        # --- Setup ---
+        gt_detection = test_data['gt_detection_win'].values
+        gt_fwhm = test_data['gt_fwhm'].values
+        gt_combined = np.logical_or(gt_detection == 1, gt_fwhm == 1)
+        n_samples = len(gt_combined)
+        window_size = self.window_size
+
+        # Create a full-length prediction array aligned with the main data array
+        aligned_y_pred = np.zeros(n_samples, dtype=int)
+        # Predictions from the model correspond to the END of a window.
+        # So a prediction at y_pred[i] corresponds to test_data index i + window_size - 1
+        pred_indices = np.arange(len(y_pred)) + window_size - 1
+        # Ensure we don't go out of bounds
+        valid_indices = pred_indices < n_samples
+        aligned_y_pred[pred_indices[valid_indices]] = y_pred[valid_indices]
+
+        # 1. Identify all ground truth event windows
+        true_events = self.extract_event_ranges(gt_detection, gt_fwhm)
+
+        # 2. For each true event, find the index of the *first* positive prediction
+        trigger_indices = {}  # Maps event_id -> trigger_index
+        for event_idx, (start, end) in enumerate(true_events):
+            first_trigger = -1
+            # Look for a trigger within the event's span
+            for i in range(start, end + 1):
+                if aligned_y_pred[i] == 1:
+                    first_trigger = i
+                    break  # Found the first one
+            trigger_indices[event_idx] = first_trigger # Will be -1 if not triggered
+
+        # 3. Calculate metrics point-by-point based on the "latch-on" logic
+        tp, fp, fn, tn = 0, 0, 0, 0
+        point_to_event_map = {i: eid for eid, (start, end) in enumerate(true_events) for i in range(start, end + 1)}
+
+        for i in range(n_samples):
+            is_gt_positive = gt_combined[i]
+
+            if is_gt_positive:
+                event_id = point_to_event_map[i]
+                trigger_idx = trigger_indices[event_id]
+
+                if trigger_idx == -1:
+                    # The event was never triggered, so this point is a False Negative
+                    fn += 1
+                else:
+                    # The event was triggered at some point
+                    if i < trigger_idx:
+                        # This point is before the first trigger, so it's a miss
+                        fn += 1
+                    else:
+                        # This point is at or after the trigger, count as a True Positive
+                        tp += 1
+            else:
+                # This is a non-vortex point
+                if aligned_y_pred[i] == 1:
+                    fp += 1
+                else:
+                    tn += 1
+                    
+        # --- Final Metrics Calculation ---
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+        print("\nTriggered Pointwise Evaluation (Corrected 'Latch-on' Logic):")
+        print(f"Triggered Pointwise Precision: {precision:.4f}")
+        print(f"Triggered Pointwise Recall: {recall:.4f}")
+        print(f"Triggered Pointwise F1-Score: {f1:.4f}")
+        print(f"Triggered Pointwise True Positives: {tp}")
+        print(f"Triggered Pointwise False Positives: {fp}")
+        print(f"Triggered Pointwise True Negatives: {tn}")
+        print(f"Triggered Pointwise False Negatives: {fn}")
+        return {
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'tp': tp,
+            'fp': fp,
+            'tn': tn,
+            'fn': fn
+        }
+
+
+>>>>>>> origin/2Stage_LSTM
     def evaluate_with_windows(self, test_results, gt_windows, test_data):
         """Evaluate model performance considering ground truth windows.
         
@@ -682,7 +969,11 @@ class VortexLSTMModel:
             test_data: Original test data DataFrame containing gt_detection_win
         """
         from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
+<<<<<<< HEAD
         import matplotlib.pyplot as plt
+=======
+        # import matplotlib.pyplot as plt  # Moved to plotting_utils.py
+>>>>>>> origin/2Stage_LSTM
         
         self.debug_print("\nDebug: Window-based evaluation")
         self.debug_print(f"Number of ground truth windows: {len(gt_windows)}")
@@ -765,6 +1056,7 @@ class VortexLSTMModel:
             'y_pred_proba': y_pred_proba
         }
 
+<<<<<<< HEAD
     def analyze_learned_patterns(self, data: pd.DataFrame, y_pred: np.ndarray, window_size: int = 60):
         """Analyze what patterns the model is learning."""
         import matplotlib.pyplot as plt
@@ -1069,6 +1361,8 @@ class VortexLSTMModel:
             'fn': fn
         }
 
+=======
+>>>>>>> origin/2Stage_LSTM
 def find_detection_windows(data: pd.DataFrame, debug: bool = False) -> list:
     """Find all detection windows (where gt_detection_win == 1 or gt_fwhm == 1)."""
     windows = []
@@ -1120,6 +1414,7 @@ def find_detection_windows(data: pd.DataFrame, debug: bool = False) -> list:
     
     return windows
 
+<<<<<<< HEAD
 def normalize_pressure(data: pd.DataFrame) -> pd.DataFrame:
     """Normalize pressure values using Z-score standardization."""
     data = data.copy()
@@ -1207,6 +1502,54 @@ def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame, feature
     return {
         'standard': standard_results,
         'window_based': window_results
+=======
+def evaluate_on_full_dataset(model: VortexLSTMModel, data: pd.DataFrame) -> dict:
+    """Evaluate model on the full dataset."""
+    print("\nEvaluating on full dataset...")
+    
+    # Prepare sequences from full dataset
+    X_full, y_full = model.prepare_sequences(data, apply_sampling=False)
+    
+    # Make predictions
+    y_pred_proba = model.predict(X_full)
+    
+    # Calculate metrics
+    from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
+    
+    # Try different thresholds to find the best F1 score
+    best_f1 = 0
+    best_threshold = 0.5
+    thresholds = np.linspace(0.3, 0.7, 41)
+    
+    for threshold in thresholds:
+        y_pred = (y_pred_proba >= threshold).astype(int)
+        f1 = f1_score(y_full, y_pred)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold = threshold
+    
+    # Use the best threshold for final evaluation
+    y_pred = (y_pred_proba >= best_threshold).astype(int)
+    
+    precision = precision_score(y_full, y_pred)
+    recall = recall_score(y_full, y_pred)
+    f1 = f1_score(y_full, y_pred)
+    roc_auc = roc_auc_score(y_full, y_pred_proba)
+    pr_auc = average_precision_score(y_full, y_pred_proba)
+    
+    return {
+        'standard': {
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'roc_auc': roc_auc,
+            'pr_auc': pr_auc,
+            'y_pred': y_pred,
+            'y_pred_proba': y_pred_proba,
+            'threshold': best_threshold,
+            'y_true': y_full
+        }
+>>>>>>> origin/2Stage_LSTM
     }
 
 def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60, debug: bool = False):
@@ -1251,6 +1594,7 @@ def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60, debug: 
     std_vortex = np.std(vortex_patterns, axis=0)
     std_non_vortex = np.std(non_vortex_patterns, axis=0)
     
+<<<<<<< HEAD
     # Plot the patterns
     plt.figure(figsize=(12, 6))
     
@@ -1279,6 +1623,11 @@ def analyze_pressure_patterns(data: pd.DataFrame, window_size: int = 60, debug: 
     results_dir.mkdir(parents=True, exist_ok=True)
     plt.savefig(results_dir / 'pressure_patterns.png')
     plt.close()
+=======
+    # Plot the patterns using the plotting module
+    results_dir = Path(__file__).parent.parent / 'results'
+    plot_pressure_patterns(mean_vortex, mean_non_vortex, std_vortex, std_non_vortex, results_dir)
+>>>>>>> origin/2Stage_LSTM
     
     # Print some statistics
     debug_print(debug, "\nPattern Statistics:")
@@ -1294,13 +1643,31 @@ def main():
     parser.add_argument('--analyze', action='store_true', help='Analyze pressure patterns')
     parser.add_argument('--full_eval', action='store_true', help='Run evaluation on full dataset')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
+<<<<<<< HEAD
     parser.add_argument('--window_size', type=int, default=30, help='Size of the input window for the LSTM.')
     parser.add_argument('--model_name', type=str, default='lstm_model.h5', help='Name for the saved model file.')
     parser.add_argument('--feature_set', type=str, default='shape', help="Feature set to use: 'shape' or 'statistical'")
+=======
+    parser.add_argument('--window_size', type=int, default=60, help='Size of the input window for the LSTM.')
+    parser.add_argument('--model_name', type=str, default='lstm_model.h5', help='Name for the saved model file.')
+    parser.add_argument('--use_artifacts', action='store_true', help='Include artifact windows as negative training examples')
+    parser.add_argument('--artifact_ratio', type=float, default=0.5, help='Ratio of artifacts to include relative to vortex events (default: 0.5)')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training')
+    parser.add_argument('--learning_rate', type=float, default=0.01, help='Learning rate for training (default: 0.01)')
+>>>>>>> origin/2Stage_LSTM
     args = parser.parse_args()
     
     print("Starting LSTM model training...")
     
+<<<<<<< HEAD
+=======
+    # Show artifact configuration
+    if args.use_artifacts:
+        print(f"Artifact integration enabled with ratio: {args.artifact_ratio}")
+    else:
+        print("Artifact integration disabled")
+    
+>>>>>>> origin/2Stage_LSTM
     # Load data
     print("Loading data...")
     start_time = time.time()
@@ -1317,7 +1684,11 @@ def main():
     
     if args.analyze:
         print("\nAnalyzing pressure patterns...")
+<<<<<<< HEAD
         analyze_pressure_patterns(data, debug=args.debug)
+=======
+        analyze_pressure_patterns(data, window_size=args.window_size, debug=args.debug)
+>>>>>>> origin/2Stage_LSTM
         return
     
     # Find all vortex events
@@ -1356,6 +1727,7 @@ def main():
     model = VortexLSTMModel(window_size=args.window_size, debug=args.debug)
     
     # Prepare sequences for each split
+<<<<<<< HEAD
     print(f"\nPreparing training sequences with '{args.feature_set}' features...")
     X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True, feature_set=args.feature_set)
     
@@ -1364,6 +1736,17 @@ def main():
     
     print(f"\nPreparing test sequences with '{args.feature_set}' features...")
     X_test, y_test = model.prepare_sequences(test_data, apply_sampling=False, feature_set=args.feature_set)
+=======
+    print(f"\nPreparing training sequences with detrended pressure features...")
+    X_train, y_train = model.prepare_sequences(train_data, apply_sampling=True, 
+                                              use_artifacts=args.use_artifacts, artifact_ratio=args.artifact_ratio)
+    
+    print(f"\nPreparing validation sequences with detrended pressure features...")
+    X_val, y_val = model.prepare_sequences(val_data, apply_sampling=False)
+    
+    print(f"\nPreparing test sequences with detrended pressure features...")
+    X_test, y_test = model.prepare_sequences(test_data, apply_sampling=False)
+>>>>>>> origin/2Stage_LSTM
     
     # Print class distribution
     print("\nClass distribution in sets:")
@@ -1392,7 +1775,11 @@ def main():
         
         # Train model
         print("\nTraining LSTM model...")
+<<<<<<< HEAD
         history = model.train(X_train, y_train, X_val, y_val, X_test, y_test, epochs=30, batch_size=128)
+=======
+        history = model.train(X_train, y_train, X_val, y_val, X_test, y_test, epochs=30, batch_size=args.batch_size, learning_rate=args.learning_rate)
+>>>>>>> origin/2Stage_LSTM
         
         # Save model
         model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1423,7 +1810,11 @@ def main():
     
     # Analyze learned patterns
     print("\nAnalyzing learned patterns...")
+<<<<<<< HEAD
     model.analyze_learned_patterns(test_data, test_results['y_pred'])
+=======
+    # model.analyze_learned_patterns(test_data, test_results['y_pred'])
+>>>>>>> origin/2Stage_LSTM
     
     # Generate test set visualizations
     print("\nGenerating test set visualizations...")
@@ -1443,7 +1834,11 @@ def main():
     # Full dataset evaluation (optional)
     if args.full_eval:
         print("\nEvaluating model on full dataset...")
+<<<<<<< HEAD
         full_results = evaluate_on_full_dataset(model, data, args.feature_set)
+=======
+        full_results = evaluate_on_full_dataset(model, data)
+>>>>>>> origin/2Stage_LSTM
         
         print("\nFull Dataset Performance:")
         print(f"Precision: {full_results['standard']['precision']:.4f}")
@@ -1468,6 +1863,7 @@ def main():
     
     # Plot training history
     if args.retrain and 'history' in locals():
+<<<<<<< HEAD
         plt.figure(figsize=(12, 4))
         
         plt.subplot(1, 2, 1)
@@ -1488,6 +1884,9 @@ def main():
         
         plt.tight_layout()
         plt.show()
+=======
+        plot_training_history(history)
+>>>>>>> origin/2Stage_LSTM
 
     # After test_results = model.evaluate(X_test, y_test)
     gt_windows = find_detection_windows(test_data, debug=False)
@@ -1507,5 +1906,11 @@ def main():
     # After triggered event evaluation in main()
     triggered_pointwise_results = model.evaluate_triggered_pointwise(test_results['y_pred'], test_data)
 
+<<<<<<< HEAD
+=======
+    # At the end, after all evaluation and visualization:
+    # Note: Post-processing filters and complex analysis removed for simplified approach
+
+>>>>>>> origin/2Stage_LSTM
 if __name__ == "__main__":
     main() 
