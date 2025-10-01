@@ -1,22 +1,22 @@
 # NASA–MOSAICS / ISL — Cassini ELS & Mars Dust Pipeline (Private)
 
-> **Status:** Internal research project (ISL × NASA/JPL).
-> **Distribution:** **Private** — not open source. Do not share or redistribute without written approval.
+Status: Internal research project (ISL × NASA/JPL).
+Distribution: Private — not open source. Do not share or redistribute without written approval.
 
-## 🔗 Quick Links
+## Quick Links
 
-* **Part I — Mars Dust Collection (internal):** 👉 **[Mars Dust](./Mars-Dust/)
-* **Part II — Cassini ELS (GitHub folder):** 👉 **[Cassini ELS](./Cassini-ELS/)
+* Part I — Mars Dust Collection (internal): [Mars Dust](./Mars-Dust/)
+* Part II — Cassini ELS (GitHub folder): [Cassini ELS](./Cassini-ELS/)
 
 ---
 
 ## Overview
 
-This repository hosts the **end-to-end data workflow** we use for:
+This repository hosts the end-to-end data workflow we use for:
 
-1. **Mars Dust Collection (Part I):** Internal acquisition, curation, and labeling of Martian dust-devil observations for downstream ML (ISL/NASA). This project, also known as VERSA (Vortex Event Reactive Sensor Algorithm), employs a power-efficient two-stage LSTM pipeline to detect Martian dust vortices using pressure sensor data. The first stage uses an LSTM Autoencoder to filter normal data, while the second stage uses an LSTM Classifier to detect vortices in the filtered data.
+1. Mars Dust Collection (Part I): Internal acquisition, curation, and labeling of Martian dust-devil observations for downstream ML (ISL/NASA). This project, also known as VERSA (Vortex Event Reactive Sensor Algorithm), employs a power-efficient two-stage LSTM pipeline to detect Martian dust vortices using pressure sensor data. The first stage uses an LSTM Autoencoder to filter normal data, while the second stage uses an LSTM Classifier to detect vortices in the filtered data.
 
-2. **Cassini CAPS/ELS context (Part II):** Mirroring and parsing Cassini **Electron Spectrometer (ELS)** products (plus Zenodo boundary labels) for plasma context and validation.
+2. Cassini CAPS/ELS context (Part II): Mirroring and parsing Cassini Electron Spectrometer (ELS) products (plus Zenodo boundary labels) for plasma context and validation.
 
 ---
 
@@ -47,7 +47,7 @@ python3 scripts/simple_mirror.py \
 python3 scripts/build_caps_products.py
 ```
 
-**NPZ contents (per product):**
+NPZ contents (per product):
 
 * `data` → (nrec, 63 energies, 8 anodes) counts/s
 * `energies_eV`, `theta_deg`, `phi_deg`
@@ -74,21 +74,21 @@ conda activate caps
 
 ## Data Rights & Attribution
 
-* **Zenodo dataset (boundary labels):** **CC BY 4.0** — cite:
+* Zenodo dataset (boundary labels): CC BY 4.0 — cite:
 Jackman, C., Thomson, M., Dougherty, M., & Daigavane, A. (2021). *Magnetic Field Boundaries in Cassini Plasma Spectrometer Data* (1.0.4) [Data set]. Zenodo. [https://doi.org/10.5281/zenodo.5004160](https://doi.org/10.5281/zenodo.5004160)
-* Acknowledge the **PDS Planetary Plasma Interactions (PPI) Node** when using ELS data.
-* **Part I (Mars Dust Collection):** internal to ISL/NASA collaborators. **Do not** redistribute.
+* Acknowledge the PDS Planetary Plasma Interactions (PPI) Node when using ELS data.
+* Part I (Mars Dust Collection): internal to ISL/NASA collaborators. Do not redistribute.
 
 ---
 
 ## Contributors
 
-* **PI / Mentor(s):** [add names/affiliations]
-* **ISL Maintainer:** [add contact]
-* **Data Questions (ELS/PDS):** PDS PPI Node docs / CAPS user guide (internal notes)
+* PI / Mentor(s): [add names/affiliations]
+* ISL Maintainer: [add contact]
+* Data Questions (ELS/PDS): PDS PPI Node docs / CAPS user guide (internal notes)
 
 ---
 
 ## Compliance
 
-This repository may reference public resources, but the **assembled workflow, curation, and annotations are private**. Ensure all shares/publications comply with ISL/NASA agreements and dataset licenses.
+This repository may reference public resources, but the assembled workflow, curation, and annotations are private. Ensure all shares/publications comply with ISL/NASA agreements and dataset licenses.
