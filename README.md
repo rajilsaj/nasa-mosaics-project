@@ -8,7 +8,6 @@ Distribution: Private — not open source. Do not share or redistribute without 
 * Part I — Mars Dust Collection (internal): [Mars Dust](./Mars-Dust/)
 * Part II — Cassini ELS (GitHub folder): [Cassini ELS](./Cassini-ELS/)
 
----
 
 ## Overview
 
@@ -18,7 +17,6 @@ This repository hosts the end-to-end data workflow we use for:
 
 2. Cassini CAPS/ELS context (Part II): Mirroring and parsing Cassini Electron Spectrometer (ELS) products (plus Zenodo boundary labels) for plasma context and validation.
 
----
 
 ## Repository Layout
 
@@ -33,7 +31,6 @@ This repository hosts the end-to-end data workflow we use for:
 /README.md                   # This file
 ```
 
----
 
 ## Minimal Workflow (Cassini ELS)
 
@@ -56,7 +53,6 @@ NPZ contents (per product):
 
 > Converting counts/s to flux requires instrument response & potential corrections (outside this repo).
 
----
 
 ## Environment
 
@@ -70,7 +66,6 @@ conda activate caps
 # add matplotlib/pandas/jupyter if you’ll use notebooks/plots
 ```
 
----
 
 ## Data Rights & Attribution
 
@@ -79,7 +74,6 @@ Jackman, C., Thomson, M., Dougherty, M., & Daigavane, A. (2021). *Magnetic Field
 * Acknowledge the PDS Planetary Plasma Interactions (PPI) Node when using ELS data.
 * Part I (Mars Dust Collection): internal to ISL/NASA collaborators. Do not redistribute.
 
----
 
 ## Contributors
 
@@ -87,7 +81,6 @@ Jackman, C., Thomson, M., Dougherty, M., & Daigavane, A. (2021). *Magnetic Field
 * ISL Maintainer: [add contact]
 * Data Questions (ELS/PDS): PDS PPI Node docs / CAPS user guide (internal notes)
 
----
 
 ## Compliance
 
