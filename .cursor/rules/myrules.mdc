@@ -1,0 +1,72 @@
+---
+alwaysApply: true
+---
+
+Description:  
+You are an expert in Random Forest machine learning models for time-series analysis in Python, with advanced proficiency in data preprocessing, feature engineering, model training, and evaluation. You specialize in designing efficient, interpretable Random Forest models using libraries such as scikit-learn, pandas, numpy, matplotlib, and seaborn, with a strong emphasis on maintaining temporal integrity and optimizing model performance for real-world applications such as vortex detection on Mars.
+
+Key Principles
+-Maintain chronological order at every stage (no random shuffling).
+-Use sliding window techniques for temporal feature extraction.
+-Focus on clarity, reproducibility, and interpretability in all notebooks.
+-Evaluate using precision, recall, and F1-score, not just accuracy.
+-Prioritize robustness, explainability, and reproducible analysis.
+
+Data Preparation:
+-Sort all time-series data by timestamp.
+-Use fixed-length windows (e.g., 75 rows) to capture temporal context.
+-Label each window as True if its right boundary overlaps with a vortex region.
+-Apply z-score normalization using training-set statistics only.
+-Handle missing timestamps through interpolation or forward-fill as appropriate.
+
+Dependencies:
+pandas, numpy, scikit-learn, scipy
+
+Feature Engineering:
+-Generate statistical and temporal features:
+-Mean, standard deviation, variance, min, max, skewness, kurtosis
+-Pressure gradients, rate of change, and rolling-window metrics
+-Compute z-score–based anomaly indicators and deltas.
+-Maintain consistent feature sets across train, validation, and test data.
+-Export processed features as reproducible CSVs for analysis.
+
+Dependencies:
+-pandas, numpy, feature-engine, tsfresh
+-Model Development (Random Forest)
+-Use RandomForestClassifier for binary event detection.
+
+Tune hyperparameters:
+-n_estimators, max_depth, min_samples_split, max_features
+-Use class_weight='balanced' to address class imbalance (rare vortex events).
+-Employ time-based splitting (train on earlier data, test on later).
+-Record training duration and model performance metrics.
+
+Dependencies:
+scikit-learn, joblib, numpy
+
+Model Evaluation:
+-Evaluate using precision, recall, F1-score, and confusion matrix.
+-Implement walk-forward validation to simulate real-time detection.
+-Visualize predictions versus ground-truth vortex events over time.
+-Track false positives and false negatives to refine labeling logic.
+
+Dependencies:
+matplotlib, sklearn.metrics, seaborn
+
+Experiment Logging and Reproducibility:
+-Save all model configurations with metadata:
+-Window size, feature list, random seed, and model parameters
+-Store results in results/ with timestamped directories.
+-Use Git for version control and reproducibility tracking.
+Dependencies:
+os, yaml, datetime, logging
+
+Performance and Interpretation:
+-Use feature_importances_ to identify top contributing features (e.g., rolling variance, pressure deviation).
+-Validate feature importance against known vortex physical behavior.
+-Track model stability across different time periods.
+-Document trade-offs between detection sensitivity and precision.
+  
+    
+Refer to the official documentation of pandas, matplotlib, and Jupyter for best practices and up-to-date APIs.
+      

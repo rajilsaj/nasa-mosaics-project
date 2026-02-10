@@ -1,0 +1,24 @@
+Temporal Split Summary
+=====================
+
+Split ratios: Train=70.0%, Val=15.0%, Test=15.0%
+Gap ratio: 3.5%
+
+TRAIN Split:
+  ML samples: 2,513,117
+  SCLK range: 667042464 to 673069414
+  Jackson events: 225
+  Vortex events: 225 events
+
+VAL Split:
+  ML samples: 538,525
+  SCLK range: 673249902 to 674142469
+  Jackson events: 47
+  Vortex events: 47 events
+
+TEST Split:
+  ML samples: 287,214
+  SCLK range: 674369521 to 674883874
+  Jackson events: 22
+  Vortex events: 22 events
+

@@ -1,0 +1,7 @@
+timestamp: 20251009_125156
+model_type: RandomForestClassifier
+n_features: 15
+feature_names: ['overall_slope', 'first_half_slope', 'second_half_slope', 'trend_consistency', 'pressure_drop', 'drop_rate', 'min_position', 'mean', 'std', 'range', 'first_half_mean', 'second_half_mean', 'mean_ratio', 'min_zscore', 'anomaly_strength']
+rf_params: {'n_estimators': 100, 'max_depth': 15, 'min_samples_split': 10, 'min_samples_leaf': 5, 'max_features': 'sqrt', 'class_weight': 'balanced', 'random_state': 42, 'n_jobs': -1}
+training_time_seconds: 0.10066866874694824
+validation_metrics: {'precision': 0.6727272727272727, 'recall': 0.7872340425531915, 'f1_score': 0.7254901960784313, 'roc_auc': 0.9556813037573562}
