@@ -77,3 +77,6 @@ results/
 # Environment variables
 .env
 .env.local
+
+# Ignore temporal splits content
+temporal_splits/
