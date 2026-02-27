@@ -9,7 +9,7 @@ Snapdragon-class embedded deployment.
 Pipeline:
 train_features.csv → XGBoost → Evaluation → Save model + metadata
 """
-
+import seaborn as sns
 import pandas as pd
 import numpy as np
 import os
@@ -23,6 +23,8 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     roc_auc_score
 )
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # =============================================================================
 # CONFIGURATION
