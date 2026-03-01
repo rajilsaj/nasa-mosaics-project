@@ -110,6 +110,8 @@ def main():
     # ---- Window ----
     parser.add_argument("--sequence-length", type=int,   default=128)
     parser.add_argument("--stride",          type=int,   default=16)
+    parser.add_argument("--context_hours",   type=float, default=24)
+    parser.add_argument("--crossing_stride",   type=int,   default=4)
 
     # ---- Training ----
     parser.add_argument("--batch-size",      type=int,   default=32)
@@ -140,7 +142,9 @@ def main():
     train_loader, val_loader, test_loader = create_data_loaders(
         processed_dir        = Path(args.data_dir),
         sequence_length      = args.sequence_length,
-        stride               = args.stride,
+        background_stride    = args.stride,
+        context_hours        = args.context_hours,
+        crossing_stride      = args.crossing_stride,
         batch_size           = args.batch_size,
         max_files            = args.max_files,
         max_samples_per_file = args.max_samples_per_file,
