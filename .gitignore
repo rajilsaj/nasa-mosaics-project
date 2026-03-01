@@ -1,8 +1,8 @@
-small_tcn_model/_pycache_ /
-tcn_model_2.0/_pycache_ /
-tcn_model/_pycache_ /
-small_tcn_model/checkpoints /
-tcn_model_2.0/checkpoints /
-tcn_model/checkpoints /
-data /
-.venv /
+small_tcn_model/_pycache_/
+tcn_model_2.0/_pycache_/
+tcn_model/_pycache_/
+small_tcn_model/checkpoints/
+tcn_model_2.0/checkpoints/
+tcn_model/checkpoints/
+data/*
+.venv/
