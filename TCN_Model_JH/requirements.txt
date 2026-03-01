@@ -1,0 +1,24 @@
+# -----------------------------------------------------------------------
+# Bow Shock / Magnetopause Detection — TCN Project
+# Python 3.10+
+# Install with: pip install -r requirements.txt
+# -----------------------------------------------------------------------
+
+# --- Deep learning ------------------------------------------------------
+torch>=2.2.0                # Neural network training and inference
+torchvision>=0.17.0         # Needed by some torch utilities
+
+# --- Data handling ------------------------------------------------------
+numpy>=1.26.0               # Array maths — the backbone of the pipeline
+xarray>=2024.1.0            # Loads and saves NetCDF (.nc) files
+netCDF4>=1.6.5              # Backend engine used by xarray for .nc files
+
+# --- Machine learning utilities -----------------------------------------
+scikit-learn>=1.4.0         # Metrics (F1, precision, recall) + scalers
+
+# --- Plotting -----------------------------------------------------------
+matplotlib>=3.8.0           # Spectrogram plots and prediction overlays
+
+# --- Optional but recommended -------------------------------------------
+pandas>=2.2.0               # Handy for reading the CSV index files
+tqdm>=4.66.0                # Progress bars during long training runs
