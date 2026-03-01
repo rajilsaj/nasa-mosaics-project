@@ -171,9 +171,10 @@ def process_nc_file(input_path, output_path, labels_dir=None):
 
 def main():
     # Define paths
-    processed_dir = Path("/Users/jacobhuss/Cassini/data/processed")
-    new_processed_dir = Path("/Users/jacobhuss/Cassini/data/new_processed")
-    labels_dir = Path("/Users/jacobhuss/Cassini/crossings/labels/all")
+    processed_dir = Path("./data/processed")
+    new_processed_dir = Path("./data/new_processed")
+    labels_dir = Path("/MOSAICS_SHARE/data/zenodo-3946033/crossings/labels/mp/all/",
+                    "/MOSAICS_SHARE/data/zenodo-3946033/crossings/labels/bs/all/")
     
     # Optional: set to None if you don't want to use YAML labels
     # If None, all crossing_event values will be 0 (False)
