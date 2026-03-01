@@ -6,7 +6,6 @@
 
 # --- Deep learning ------------------------------------------------------
 torch>=2.2.0                # Neural network training and inference
-torchvision>=0.17.0         # Needed by some torch utilities
 
 # --- Data handling ------------------------------------------------------
 numpy>=1.26.0               # Array maths — the backbone of the pipeline
