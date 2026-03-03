@@ -215,8 +215,7 @@ def extract_windows_from_split(ml_df, jackson_df, split_name, window_size, verbo
         if verbose:
             print(f"    DEBUG: SCLK {target_sclk} found at position {target_position}")
         
-        # Look backward to find where gt_detection_win == True
-        # Search from beginning to target position
+        # Find event-local precursor block up to target position.
         search_space = ml_df_reset.iloc[:target_position + 1]  # Include target position
         precursor_region = search_space[search_space['gt_detection_win'] == True]
         
@@ -226,12 +225,16 @@ def extract_windows_from_split(ml_df, jackson_df, split_name, window_size, verbo
             failed_count += 1
             continue
         
-        # Get the position of the FIRST gt_detection_win=True (where precursor starts)
-        first_precursor_position = precursor_region.index[0]
-        
-        # Go back 60 steps from the FIRST precursor position (before precursor starts)
-        start_position = max(0, first_precursor_position - window_size)
-        end_position = first_precursor_position - 1  # Window ends just before precursor starts
+        # Use the LAST True before/at the event and walk back to the local block start.
+        # This avoids anchoring many events to the earliest True in the split.
+        last_true_position = precursor_region.index[-1]
+        block_start = last_true_position
+        while block_start > 0 and bool(ml_df_reset.iloc[block_start - 1]['gt_detection_win']):
+            block_start -= 1
+
+        # Mission-aligned policy: positive windows end inside detection window.
+        end_position = last_true_position
+        start_position = end_position - window_size + 1
         
         if verbose:
             print(f"    DEBUG: start_position={start_position}, end_position={end_position}")
@@ -244,8 +247,8 @@ def extract_windows_from_split(ml_df, jackson_df, split_name, window_size, verbo
             if verbose:
                 print(f"    DEBUG: Window extracted successfully, size={len(window)}")
             
-            # Validate window size
-            if len(window) < window_size:
+            # Validate bounds and window size
+            if start_position < 0 or len(window) < window_size:
                 if verbose:
                     print(f"  WARNING: Window too small for SCLK {target_sclk}: {len(window)} < {window_size}")
                 failed_count += 1
@@ -255,6 +258,7 @@ def extract_windows_from_split(ml_df, jackson_df, split_name, window_size, verbo
             window['window_id'] = successful_count
             window['event_sclk'] = target_sclk
             window['split'] = split_name
+            window['label'] = True
             
             all_windows.append(window)
             successful_count += 1
@@ -302,6 +306,16 @@ def extract_all_windows(splits, window_size, verbose=False):
             result_df.to_csv(output_file, index=False)
             
             print(f"  {split_name.upper()}: {len(result_df):,} rows ({len(windows)} windows) -> {output_file}")
+
+            # Diagnostics for duplicate/collapsed window spans.
+            span_stats = (
+                result_df.groupby('window_id')
+                .agg(start_sclk=('SCLK', 'min'), end_sclk=('SCLK', 'max'))
+                .reset_index()
+            )
+            dup_spans = int(span_stats.duplicated(subset=['start_sclk', 'end_sclk']).sum())
+            print(f"    Unique spans: {len(span_stats) - dup_spans:,}/{len(span_stats):,}")
+            print(f"    Duplicate span count: {dup_spans}")
             
             # Coverage analysis
             original_gt_count = splits['ml'][split_name]['gt_detection_win'].sum()

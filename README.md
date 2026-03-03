@@ -85,25 +85,35 @@ pip install -r requirements.txt
 ### Run Complete Pipeline
 
 ```bash
-# 1. Temporal splitting and window extraction (60 samples before vortex)
-python data_preparation.py --extract_windows --verbose
+# 1. Temporal split only (canonical entrypoint)
+python "core pipeline scripts/split_data.py"
 
-# 2. Generate balanced training data (negative sampling)
-python negative_sampling.py --split train --ratio 1.0
+# 2. Extract positive windows only
+python "core pipeline scripts/extract_windows.py" --split all --window_size 60
 
-# 3. Engineer 15 optimized features
-python feature_engineering.py --split train
+# 3. Generate balanced datasets
+python "core pipeline scripts/negative_sampling.py" --split train --ratio 1.0 --window_size 60 --buffer 50
+python "core pipeline scripts/negative_sampling.py" --split val --ratio 10.0 --window_size 60 --buffer 50
+python "core pipeline scripts/negative_sampling.py" --split test --ratio 10.0 --window_size 60 --buffer 50
 
-# 4. Train Random Forest model
-python train_rf_model.py
+# 4. Engineer features for train/val/test
+python "core pipeline scripts/feature_engineering.py" --split train --window_size 60
+python "core pipeline scripts/feature_engineering.py" --split val --window_size 60
+python "core pipeline scripts/feature_engineering.py" --split test --window_size 60
 
-# 5. Generate sliding windows for realistic evaluation
+# 5. Train RF with validation-selected threshold
+python "core pipeline scripts/train_rf_model.py" --features_dir "." --primary_metric f1
+
+# 6. Generate sliding windows for realistic evaluation
 python sliding_window_generator.py --split val --step_size 10
 python sliding_window_generator.py --split test --step_size 10
 
-# 6. Evaluate on sliding windows (deployment simulation)
+# 7. Evaluate on sliding windows (deployment simulation)
 python sliding_window_evaluation.py
 ```
+
+Canonical run order is also documented in `core pipeline scripts/PIPELINE_ORDER.md`.
+For new experiments, avoid `core pipeline scripts/temporal_splits.py` and use `core pipeline scripts/split_data.py`.
 
 ---
 
@@ -203,10 +213,13 @@ Vortex backup/
 ├── 📄 requirements.txt                 # Python dependencies
 │
 ├── 🔧 Core Pipeline Scripts
-│   ├── data_preparation.py             # Temporal splitting & window extraction
+│   ├── split_data.py                   # Temporal splitting only (canonical)
+│   ├── extract_windows.py              # Positive window extraction only
+│   ├── PIPELINE_ORDER.md               # Canonical command order
+│   ├── data_preparation.py             # Legacy combined split+extract
 │   ├── feature_engineering.py          # 15-feature computation
 │   ├── negative_sampling.py            # Balanced training data generation
-│   ├── train_rf_model.py              # RF training & evaluation (fixed windows)
+│   ├── train_rf_model.py               # RF training + validation threshold sweep
 │   ├── sliding_window_generator.py    # Continuous monitoring simulation
 │   └── sliding_window_evaluation.py   # Deployment evaluation
 │
@@ -232,13 +245,14 @@ Vortex backup/
 ├── 🤖 Models & Results
 │   ├── models/
 │   │   ├── rf_vortex_detector_*.pkl   # Trained Random Forest
-│   │   └── model_metadata_*.txt       # Training configuration
+│   │   └── model_metadata_*.json      # Training configuration + threshold policy
 │   │
 │   └── results/
-│       └── feature_importance.csv      # Feature ranking
+│       ├── feature_importance.csv      # Feature ranking
+│       └── validation_threshold_sweep.csv  # Threshold search on validation
 │
 └── 📝 Legacy Scripts (deprecated)
-    ├── temporal_splits.py              # (Integrated into data_preparation.py)
+    ├── temporal_splits.py              # Deprecated split script (use split_data.py)
     └── Anita copy 2.py                 # Original approach
 ```
 
@@ -246,14 +260,17 @@ Vortex backup/
 
 ## 📖 Usage Guide
 
-### 1. Data Preparation
+### 1. Data Preparation (Modular)
 
 ```bash
-# Extract 60-sample windows before vortex events
-python data_preparation.py --extract_windows --window_size 60 --verbose
+# Split only
+python "core pipeline scripts/split_data.py"
+
+# Extract windows only
+python "core pipeline scripts/extract_windows.py" --split all --window_size 60
 
 # Output: temporal_splits/ directory with train/val/test splits
-#         train_windows.csv with 188 positive windows
+#         train_windows.csv, val_windows.csv, test_windows.csv
 ```
 
 **Configuration:**
@@ -293,11 +310,15 @@ python feature_engineering.py --split train
 ### 4. Model Training
 
 ```bash
-# Train Random Forest with class balancing
-python train_rf_model.py
+# Train Random Forest with validation-selected threshold (frozen for test)
+python "core pipeline scripts/train_rf_model.py" \
+  --features_dir "." \
+  --primary_metric f1 \
+  --threshold_grid "0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80,0.85,0.90,0.95"
 
 # Output: models/rf_vortex_detector_*.pkl
 #         results/feature_importance.csv
+#         results/validation_threshold_sweep.csv
 ```
 
 **Model Performance (Fixed Windows):**

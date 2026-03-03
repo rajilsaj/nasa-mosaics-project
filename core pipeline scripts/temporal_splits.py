@@ -10,6 +10,11 @@ Key Principles:
 - Train on early data, test on later data (maintains causality)
 - Temporal gaps between splits (prevents leakage)
 - Realistic evaluation (model learns from past, predicts future)
+
+DEPRECATION NOTICE:
+This script is kept for backward compatibility.
+Prefer `split_data.py` for all new experiments to keep split policy consistent
+with the modular split -> extract workflow.
 """
 
 import pandas as pd
@@ -182,6 +187,7 @@ def save_temporal_splits(ml_splits, jackson_splits, output_dir):
 
 def main():
     """Main temporal splitting pipeline."""
+    print("[DEPRECATED] Use split_data.py for new experiments.")
     print("="*70)
     print("MARS VORTEX DETECTION - TEMPORAL SPLITTING")
     print("="*70)

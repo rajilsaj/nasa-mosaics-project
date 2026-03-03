@@ -54,7 +54,7 @@ Examples:
     
     return parser.parse_args()
 
-def determine_window_label(window_data, jackson_events_df, ml_df_full):
+def determine_window_label(end_idx, jackson_events_df, ml_df_full):
     """
     Determine window label using NASA's specific logic.
     
@@ -66,15 +66,12 @@ def determine_window_label(window_data, jackson_events_df, ml_df_full):
     Returns:
         str: 'True', 'False', or 'Omit'
     """
-    if len(window_data) == 0:
+    if end_idx < 0 or end_idx >= len(ml_df_full):
         return 'Omit'
-    
-    # Get the right-hand side (end) of the window
-    window_end_sclk = window_data['SCLK'].iloc[-1]
-    window_end_idx = window_data.index[-1]
-    
-    # Find corresponding row in full ML dataset
-    ml_row = ml_df_full.iloc[window_end_idx]
+
+    # Use positional index from the sliding loop (safer than relying on DataFrame index labels)
+    ml_row = ml_df_full.iloc[end_idx]
+    window_end_sclk = ml_row['SCLK']
     
     # Apply NASA labeling logic
     if ml_row['gt_detection_win']:
@@ -82,7 +79,14 @@ def determine_window_label(window_data, jackson_events_df, ml_df_full):
     elif ml_row['gt_fwhm']:
         return 'Omit'  # Right-hand side in actual vortex (too late)
     else:
-        return 'False'  # Right-hand side before precursor region
+        # "After" handling:
+        # If this window end is beyond the final Jackson event in this split,
+        # it is not a valid pre-event negative and should be omitted.
+        if len(jackson_events_df) > 0:
+            last_event_sclk = jackson_events_df['SCLK'].max()
+            if window_end_sclk > last_event_sclk:
+                return 'Omit'
+        return 'False'  # Right-hand side before a future precursor/event
 
 def generate_sliding_windows(ml_df, jackson_df, split_name, window_size, step_size, verbose=False):
     """Generate sliding windows for a temporal split."""
@@ -103,7 +107,8 @@ def generate_sliding_windows(ml_df, jackson_df, split_name, window_size, step_si
         window_data = ml_df.iloc[i:i + window_size].copy()
         
         # Determine label using NASA logic
-        label = determine_window_label(window_data, jackson_df, ml_df)
+        end_idx = i + window_size - 1
+        label = determine_window_label(end_idx, jackson_df, ml_df)
         label_counts[label] += 1
         
         # Store window metadata

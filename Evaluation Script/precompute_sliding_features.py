@@ -15,6 +15,7 @@ import pandas as pd
 import numpy as np
 import json
 import argparse
+import os
 from tqdm import tqdm
 from scipy import stats
 import warnings
@@ -218,7 +219,7 @@ def main():
     features_df.to_csv(output_file, index=False)
     
     print(f"\n[SUCCESS] Saved {len(features_df):,} feature vectors to: {output_file}")
-    print(f"File size: {pd.io.common.get_filepath_or_buffer(output_file)[0]}")
+    print(f"File size: {os.path.getsize(output_file) / (1024 * 1024):.1f} MB")
     
     # Show label distribution
     label_counts = features_df['label'].value_counts()

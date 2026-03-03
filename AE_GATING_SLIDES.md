@@ -1,5 +1,64 @@
 # Autoencoder Gating for Random Forest Model
-## Two-Slide Presentation
+## Presentation for NASA Scientists
+
+---
+
+## SLIDE 0: Why Consider Autoencoder Gating?
+
+### **The Challenge: Rare Event Detection with Limited Quality Data**
+
+**Context:**
+- **Vortex events are extremely rare**: ~0.5% of all pressure measurements
+- **Limited labeled examples**: Only 188 positive training windows available
+- **Data quality varies**: Some windows contain clear vortex signatures, others are ambiguous or noisy
+- **Mission-critical requirement**: Need high precision and recall for on-board detection
+
+### **The Problem with Standard Training**
+
+When training Random Forest on all available balanced samples:
+- **Noisy examples dilute learning**: Ambiguous windows confuse the model
+- **Equal weight to all samples**: High-quality and low-quality examples treated the same
+- **Suboptimal decision boundaries**: Model learns from confusing examples
+- **Limited improvement potential**: Adding more data is expensive (requires more mission time)
+
+### **Why Autoencoder as a Solution?**
+
+**Scientific Rationale:**
+
+1. **Unsupervised Pattern Discovery**
+   - Autoencoders learn normal pressure patterns without labels
+   - High reconstruction error = anomalous/interesting patterns
+   - Identifies windows with strong physical signatures
+
+2. **Quality Filtering Without Labels**
+   - No need for additional manual labeling
+   - Leverages unsupervised learning to identify informative examples
+   - Reduces human bias in data selection
+
+3. **Computational Efficiency**
+   - Fast inference: <1ms per window
+   - Suitable for edge deployment (Qualcomm Snapdragon)
+   - Minimal power overhead
+
+4. **Domain-Appropriate**
+   - Pressure time-series have characteristic patterns
+   - Vortex events create distinct anomalies
+   - Autoencoder naturally captures these deviations
+
+### **The Hypothesis**
+
+**If we filter training data using autoencoder reconstruction error:**
+- Keep only high-information examples (strong vortex signatures)
+- Remove ambiguous/confusing samples
+- **Then:** Random Forest will learn better decision boundaries from cleaner data
+
+### **Expected Benefits**
+
+✅ **Better generalization** from high-quality examples  
+✅ **Reduced false positives** (model more confident)  
+✅ **Improved recall** (better pattern recognition)  
+✅ **Faster training** (fewer samples to process)  
+✅ **Mission-ready** (maintains edge deployment constraints)
 
 ---
 

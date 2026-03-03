@@ -31,3 +31,5 @@ This dataset includes features not in the temporal splits:
 - [ ] Train Random Forest model
 - [ ] Evaluate on natural imbalance
 
+Canonical command order is in `comprehensive_analysis/PIPELINE_ORDER.md`.
+

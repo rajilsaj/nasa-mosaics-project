@@ -3,29 +3,33 @@ Random Forest Training for Mars Vortex Detection
 =================================================
 
 This script trains a Random Forest classifier for on-board vortex detection.
-Designed for deployment on Qualcomm Snapdragon-class processors.
+It is aligned with the modular pipeline:
+split_data.py -> extract_windows.py -> negative_sampling.py -> feature_engineering.py
 
 Key Features:
 - Handles class imbalance with class_weight='balanced'
-- Hyperparameter tuning
-- Comprehensive evaluation metrics (Precision, Recall, F1-score)
+- Validation-based threshold selection (scientifically correct)
+- Test evaluation at frozen validation-selected threshold
 - Feature importance analysis
-- Model persistence for deployment
+- Model + metadata persistence for deployment
 """
 
-import pandas as pd
-import numpy as np
+import argparse
+import json
 import os
 import time
-import joblib
 from datetime import datetime
+
+import joblib
+import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
-    classification_report, confusion_matrix, 
-    precision_recall_fscore_support, roc_auc_score, roc_curve
+    classification_report,
+    confusion_matrix,
+    precision_recall_fscore_support,
+    roc_auc_score,
 )
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 # =============================================================================
 # CONFIGURATION
@@ -34,7 +38,7 @@ import seaborn as sns
 class Config:
     """Training configuration."""
     
-    # File paths
+    # File paths (default assumes feature_engineering.py output in current directory)
     TRAIN_FILE = "train_features.csv"
     VAL_FILE = "val_features.csv"
     TEST_FILE = "test_features.csv"
@@ -58,28 +62,75 @@ class Config:
     # Feature columns (exclude metadata)
     EXCLUDE_COLUMNS = ['window_id', 'event_sclk', 'label']
     
+    # Threshold search
+    THRESHOLD_GRID = [round(x, 2) for x in np.arange(0.05, 0.96, 0.05)]
+    PRIMARY_METRIC = "f1"  # choices: f1, precision, recall
+    MIN_PRECISION = 0.0
+    MIN_RECALL = 0.0
+
     # Random seed
     RANDOM_SEED = 42
+
+
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Train RF with validation-selected threshold."
+    )
+    parser.add_argument(
+        "--features_dir",
+        default=".",
+        help="Directory containing train/val/test feature CSV files.",
+    )
+    parser.add_argument("--train_file", default=Config.TRAIN_FILE)
+    parser.add_argument("--val_file", default=Config.VAL_FILE)
+    parser.add_argument("--test_file", default=Config.TEST_FILE)
+    parser.add_argument(
+        "--primary_metric",
+        choices=["f1", "precision", "recall"],
+        default=Config.PRIMARY_METRIC,
+        help="Metric used to select validation threshold.",
+    )
+    parser.add_argument(
+        "--threshold_grid",
+        default=",".join([str(x) for x in Config.THRESHOLD_GRID]),
+        help="Comma-separated thresholds, e.g. 0.1,0.2,0.3",
+    )
+    parser.add_argument("--min_precision", type=float, default=Config.MIN_PRECISION)
+    parser.add_argument("--min_recall", type=float, default=Config.MIN_RECALL)
+    return parser.parse_args()
 
 # =============================================================================
 # DATA LOADING
 # =============================================================================
 
-def load_data():
+def load_data(args):
     """Load training, validation, and test datasets."""
     print("Loading datasets...")
-    
-    train_df = pd.read_csv(Config.TRAIN_FILE)
-    val_df = pd.read_csv(Config.VAL_FILE)
-    test_df = pd.read_csv(Config.TEST_FILE)
-    
+
+    train_path = os.path.join(args.features_dir, args.train_file)
+    val_path = os.path.join(args.features_dir, args.val_file)
+    test_path = os.path.join(args.features_dir, args.test_file)
+
+    for p in [train_path, val_path, test_path]:
+        if not os.path.exists(p):
+            raise FileNotFoundError(
+                f"Required feature file not found: {p}. "
+                "Run split/extract/sampling/feature engineering first."
+            )
+
+    train_df = pd.read_csv(train_path)
+    val_df = pd.read_csv(val_path)
+    test_df = pd.read_csv(test_path)
+
     print(f"  Training: {len(train_df)} samples")
     print(f"  Validation: {len(val_df)} samples")
     print(f"  Test: {len(test_df)} samples")
-    
+
     return train_df, val_df, test_df
 
-def prepare_features(df):
+
+def prepare_features(df, feature_cols=None):
     """
     Prepare features and labels from DataFrame.
     
@@ -90,12 +141,16 @@ def prepare_features(df):
         X: Feature matrix
         y: Label vector
     """
-    # Get feature columns
-    feature_cols = [col for col in df.columns if col not in Config.EXCLUDE_COLUMNS]
-    
+    # Derive from training split once, then enforce same order on val/test
+    if feature_cols is None:
+        feature_cols = [col for col in df.columns if col not in Config.EXCLUDE_COLUMNS]
+    missing = [c for c in feature_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing expected feature columns: {missing}")
+
     X = df[feature_cols].values
     y = df['label'].values
-    
+
     return X, y, feature_cols
 
 # =============================================================================
@@ -138,7 +193,7 @@ def train_random_forest(X_train, y_train):
 # MODEL EVALUATION
 # =============================================================================
 
-def evaluate_model(model, X, y, split_name="Validation"):
+def evaluate_model(model, X, y, threshold=0.5, split_name="Validation"):
     """
     Evaluate model performance with comprehensive metrics.
     
@@ -156,8 +211,8 @@ def evaluate_model(model, X, y, split_name="Validation"):
     print(f"{'='*70}")
     
     # Predictions
-    y_pred = model.predict(X)
     y_pred_proba = model.predict_proba(X)[:, 1]
+    y_pred = (y_pred_proba >= threshold).astype(int)
     
     # Class distribution
     unique, counts = np.unique(y, return_counts=True)
@@ -166,6 +221,7 @@ def evaluate_model(model, X, y, split_name="Validation"):
     
     # Confusion Matrix
     cm = confusion_matrix(y, y_pred)
+    print(f"\nDecision threshold: {threshold:.3f}")
     print(f"\nConfusion Matrix:")
     print(f"                Predicted Negative  Predicted Positive")
     print(f"True Negative   {cm[0,0]:<20} {cm[0,1]:<20}")
@@ -176,7 +232,9 @@ def evaluate_model(model, X, y, split_name="Validation"):
     print(classification_report(y, y_pred, target_names=['Negative', 'Positive']))
     
     # Detailed Metrics
-    precision, recall, f1, support = precision_recall_fscore_support(y, y_pred, average='binary')
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        y, y_pred, average='binary', zero_division=0
+    )
     
     print(f"\nDetailed Metrics (Positive Class):")
     print(f"  Precision: {precision:.4f} (of predicted positives, how many are correct)")
@@ -206,6 +264,7 @@ def evaluate_model(model, X, y, split_name="Validation"):
     # Return metrics dictionary
     metrics = {
         'split': split_name,
+        'threshold': threshold,
         'precision': precision,
         'recall': recall,
         'f1': f1,
@@ -218,6 +277,63 @@ def evaluate_model(model, X, y, split_name="Validation"):
     }
     
     return metrics
+
+
+def parse_threshold_grid(raw_grid):
+    """Parse comma-separated threshold values."""
+    values = []
+    for token in raw_grid.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        val = float(token)
+        if val <= 0.0 or val >= 1.0:
+            raise ValueError(f"Invalid threshold {val}; use values in (0, 1).")
+        values.append(val)
+    if not values:
+        raise ValueError("Threshold grid is empty.")
+    return sorted(set(values))
+
+
+def evaluate_threshold_grid(model, X_val, y_val, thresholds):
+    """Evaluate validation performance over threshold grid."""
+    proba = model.predict_proba(X_val)[:, 1]
+    rows = []
+    for t in thresholds:
+        pred = (proba >= t).astype(int)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_val, pred, average="binary", zero_division=0
+        )
+        rows.append(
+            {
+                "threshold": t,
+                "precision": float(precision),
+                "recall": float(recall),
+                "f1": float(f1),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def select_best_threshold(metrics_df, primary_metric, min_precision, min_recall):
+    """Select best threshold on validation with optional constraints."""
+    eligible = metrics_df[
+        (metrics_df["precision"] >= min_precision) &
+        (metrics_df["recall"] >= min_recall)
+    ].copy()
+
+    if eligible.empty:
+        print(
+            "[WARNING] No threshold met constraints. Falling back to unconstrained selection."
+        )
+        eligible = metrics_df.copy()
+
+    # stable tie-break: maximize primary -> maximize f1 -> lower threshold (recall-friendly)
+    eligible = eligible.sort_values(
+        by=[primary_metric, "f1", "threshold"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    return float(eligible.iloc[0]["threshold"]), eligible.iloc[0].to_dict()
 
 # =============================================================================
 # FEATURE IMPORTANCE
@@ -259,7 +375,7 @@ def analyze_feature_importance(model, feature_names):
 # MODEL PERSISTENCE
 # =============================================================================
 
-def save_model(model, feature_names, training_time, metrics):
+def save_model(model, feature_names, training_time, val_metrics, test_metrics, best_threshold, args):
     """
     Save trained model and metadata.
     
@@ -293,21 +409,30 @@ def save_model(model, feature_names, training_time, metrics):
         'feature_names': feature_names,
         'rf_params': Config.RF_PARAMS,
         'training_time_seconds': training_time,
+        "primary_metric": args.primary_metric,
+        "min_precision": args.min_precision,
+        "min_recall": args.min_recall,
+        "selected_threshold": best_threshold,
         'validation_metrics': {
-            'precision': metrics['precision'],
-            'recall': metrics['recall'],
-            'f1_score': metrics['f1'],
-            'roc_auc': metrics['auc']
-        }
+            'precision': val_metrics['precision'],
+            'recall': val_metrics['recall'],
+            'f1_score': val_metrics['f1'],
+            'roc_auc': val_metrics['auc']
+        },
+        'test_metrics': {
+            'precision': test_metrics['precision'],
+            'recall': test_metrics['recall'],
+            'f1_score': test_metrics['f1'],
+            'roc_auc': test_metrics['auc']
+        },
     }
-    
-    metadata_path = os.path.join(Config.OUTPUT_DIR, f"model_metadata_{timestamp}.txt")
-    with open(metadata_path, 'w') as f:
-        for key, value in metadata.items():
-            f.write(f"{key}: {value}\n")
+
+    metadata_path = os.path.join(Config.OUTPUT_DIR, f"model_metadata_{timestamp}.json")
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, default=str)
     print(f"  Metadata saved to: {metadata_path}")
-    
-    return model_path
+
+    return model_path, metadata_path
 
 # =============================================================================
 # MAIN TRAINING PIPELINE
@@ -315,52 +440,80 @@ def save_model(model, feature_names, training_time, metrics):
 
 def main():
     """Main training pipeline."""
+    args = parse_args()
     print("="*70)
     print("RANDOM FOREST TRAINING - MARS VORTEX DETECTION")
     print("="*70)
-    
+
     # Set random seed
     np.random.seed(Config.RANDOM_SEED)
-    
+
     # Load data
-    train_df, val_df, test_df = load_data()
-    
+    train_df, val_df, test_df = load_data(args)
+
     # Prepare features
     print("\nPreparing features...")
     X_train, y_train, feature_names = prepare_features(train_df)
-    X_val, y_val, _ = prepare_features(val_df)
-    X_test, y_test, _ = prepare_features(test_df)
-    
+    X_val, y_val, _ = prepare_features(val_df, feature_names)
+    X_test, y_test, _ = prepare_features(test_df, feature_names)
+
     print(f"  Feature count: {len(feature_names)}")
     print(f"  Features: {feature_names}")
-    
+
     # Train model
     rf_model, training_time = train_random_forest(X_train, y_train)
-    
-    # Evaluate on validation set
-    val_metrics = evaluate_model(rf_model, X_val, y_val, "Validation")
-    
-    # Evaluate on test set (final evaluation)
-    test_metrics = evaluate_model(rf_model, X_test, y_test, "Test")
-    
+
+    thresholds = parse_threshold_grid(args.threshold_grid)
+    print(f"\nValidation threshold sweep on {len(thresholds)} thresholds...")
+    threshold_metrics_df = evaluate_threshold_grid(rf_model, X_val, y_val, thresholds)
+    best_threshold, best_row = select_best_threshold(
+        threshold_metrics_df,
+        primary_metric=args.primary_metric,
+        min_precision=args.min_precision,
+        min_recall=args.min_recall,
+    )
+    print(
+        f"Selected threshold={best_threshold:.3f} "
+        f"(precision={best_row['precision']:.4f}, recall={best_row['recall']:.4f}, f1={best_row['f1']:.4f})"
+    )
+
+    os.makedirs(Config.RESULTS_DIR, exist_ok=True)
+    threshold_path = os.path.join(Config.RESULTS_DIR, "validation_threshold_sweep.csv")
+    threshold_metrics_df.to_csv(threshold_path, index=False)
+    print(f"Validation threshold sweep saved to: {threshold_path}")
+
+    # Evaluate with frozen validation-selected threshold
+    val_metrics = evaluate_model(rf_model, X_val, y_val, best_threshold, "Validation")
+    test_metrics = evaluate_model(rf_model, X_test, y_test, best_threshold, "Test")
+
     # Feature importance
     importance_df = analyze_feature_importance(rf_model, feature_names)
-    
+
     # Save feature importance
     importance_path = os.path.join(Config.RESULTS_DIR, "feature_importance.csv")
     importance_df.to_csv(importance_path, index=False)
     print(f"\nFeature importance saved to: {importance_path}")
-    
+
     # Save model
-    model_path = save_model(rf_model, feature_names, training_time, val_metrics)
-    
+    model_path, metadata_path = save_model(
+        rf_model,
+        feature_names,
+        training_time,
+        val_metrics,
+        test_metrics,
+        best_threshold,
+        args,
+    )
+
     print(f"\n{'='*70}")
     print("TRAINING COMPLETED SUCCESSFULLY")
     print(f"{'='*70}")
     print(f"\nModel ready for deployment:")
     print(f"  Model file: {model_path}")
+    print(f"  Metadata file: {metadata_path}")
     print(f"  Features: {len(feature_names)}")
     print(f"  Training time: {training_time:.2f} seconds")
+    print(f"  Selected threshold: {best_threshold:.3f}")
     print(f"  Validation F1-Score: {val_metrics['f1']:.4f}")
     print(f"  Test F1-Score: {test_metrics['f1']:.4f}")
 
