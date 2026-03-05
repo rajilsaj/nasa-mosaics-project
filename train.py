@@ -47,8 +47,8 @@ def run_epoch(
     """
     One pass over a DataLoader.
 
-    If optimizer is provided the model is trained (weighted loss).
-    Otherwise the model is evaluated (unweighted loss — comparable numbers).
+    If optimizer is provided the model is trained; otherwise it is evaluated.
+    Labels are per-sequence scalars (0 or 1) derived from the centre timestep.
     """
     training = optimizer is not None
     model.train() if training else model.eval()
@@ -113,9 +113,9 @@ def main():
     parser.add_argument("--stride",           type=int,   default=16,
                         help="Background window slide step (~2 min at 8s cadence)")
     parser.add_argument("--context-hours",    type=float, default=24.0,
-                        help="Hours each side of a crossing midpoint for dense sampling")
+                        help="Hours of data each side of a crossing midpoint for dense sampling")
     parser.add_argument("--crossing-stride",  type=int,   default=4,
-                        help="Slide step inside the crossing context region (~32s)")
+                        help="Window slide step inside the crossing context region (~32s at 8s cadence)")
 
     # ---- Training ----
     parser.add_argument("--batch-size",       type=int,   default=32)
@@ -155,26 +155,13 @@ def main():
     )
 
     # --- Class-weighted loss ----------------------------------------------
-    # pos_weight tells the loss how much more to penalise missed crossings
-    # vs false alarms.  The raw ratio (54x here) is too aggressive — it
-    # causes the model to predict crossing everywhere just to avoid any
-    # crossing penalty.  Capping at 10 keeps pressure on recall without
-    # destroying precision.
+    # Penalise missed crossings proportionally to how rare they are.
+    # pos_weight = (number of none windows) / (number of crossing windows)
+    # This is computed from the actual training data so it always matches.
     n_none     = int((train_loader.dataset.labels == 0).sum())
     n_crossing = int((train_loader.dataset.labels == 1).sum())
-    raw_weight = n_none / max(n_crossing, 1)
-    capped_weight = min(raw_weight, 10.0)
-
-    print(f"Class counts  — none: {n_none}, crossing: {n_crossing}")
-    print(f"Raw ratio     : {raw_weight:.1f}  →  capped pos_weight: {capped_weight:.1f}")
-
-    pos_weight = torch.tensor([capped_weight], dtype=torch.float).to(device)
-
-    # Weighted criterion used only during training
-    train_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-
-    # Plain criterion used for val/test — keeps loss values comparable
-    eval_criterion = nn.BCEWithLogitsLoss()
+    pos_weight = torch.tensor([n_none / max(n_crossing, 1)], dtype=torch.float).to(device)
+    print(f"pos_weight for BCEWithLogitsLoss : {pos_weight.item():.2f}")
 
     # --- Model ------------------------------------------------------------
     sample_seq, _ = next(iter(train_loader))
@@ -189,6 +176,7 @@ def main():
     print(f"Energy bins : {num_energy_bins}")
     print(f"Parameters  : {sum(p.numel() for p in model.parameters()):,}")
 
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=3
@@ -199,11 +187,8 @@ def main():
     history = {"train": [], "val": []}
 
     for epoch in range(1, args.epochs + 1):
-        # Training uses weighted loss to push recall up
-        train_m = run_epoch(model, train_loader, train_criterion, device, optimizer)
-
-        # Val uses plain loss so numbers are stable and comparable epoch to epoch
-        val_m   = run_epoch(model, val_loader, eval_criterion, device)
+        train_m = run_epoch(model, train_loader, criterion, device, optimizer)
+        val_m   = run_epoch(model, val_loader,   criterion, device)
         scheduler.step(val_m["loss"])
 
         history["train"].append(train_m)
@@ -230,7 +215,7 @@ def main():
             print(f"  → saved best model (val F1 {best_f1:.4f})")
 
     # --- Test evaluation --------------------------------------------------
-    test_m = run_epoch(model, test_loader, eval_criterion, device)
+    test_m = run_epoch(model, test_loader, criterion, device)
     print(f"\nTest: {test_m}")
 
     torch.save(

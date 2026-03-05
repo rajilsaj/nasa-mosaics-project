@@ -1,169 +1,143 @@
 """
 Temporal Convolutional Network (TCN) for detecting bow shock crossing events.
 
-Based on the TCN architecture from "An Empirical Evaluation of Generic Convolutional
-and Recurrent Networks for Sequence Modeling" by Bai et al. (2018).
+Based on: "An Empirical Evaluation of Generic Convolutional and Recurrent
+Networks for Sequence Modeling" - Bai et al. (2018).
+
+Architecture overview
+---------------------
+Input: (batch, time_steps, energy_bins)
+  -> transpose to (batch, energy_bins, time_steps)  -- Conv1d expects channels first
+  -> TemporalBlock x N  -- each block doubles the dilation, widening the receptive field
+  -> transpose back to (batch, time_steps, channels)
+  -> Dropout -> Linear(channels -> 1)  -- one logit per timestep
+Output: (batch, time_steps, 1)  raw logits -- pass through sigmoid for probabilities
+
+Dilated convolutions let each layer "see" further back in time without
+using a very large kernel. With 4 layers and kernel_size=3:
+  layer 0: dilation 1 -> receptive field  3 timesteps
+  layer 1: dilation 2 -> receptive field  7 timesteps
+  layer 2: dilation 4 -> receptive field 15 timesteps
+  layer 3: dilation 8 -> receptive field 31 timesteps
+At 8-second cadence, 31 timesteps = ~4 minutes of context per output step.
 """
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from typing import Optional
 
 
+# ---------------------------------------------------------------------------
+# Helper -- trim the extra padding added by causal convolution
+# ---------------------------------------------------------------------------
+
+class Chomp1d(nn.Module):
+    """
+    Remove the right-side padding that causal convolutions add.
+
+    Causal means the output at time t only depends on inputs at t and earlier --
+    the model cannot "cheat" by looking at future timesteps.
+    We achieve this by padding (kernel_size - 1) * dilation on the left,
+    then trimming the same amount from the right here.
+    """
+
+    def __init__(self, chomp_size: int):
+        super().__init__()
+        self.chomp_size = chomp_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x[:, :, : -self.chomp_size].contiguous()
+
+
+# ---------------------------------------------------------------------------
+# One TCN building block
+# ---------------------------------------------------------------------------
+
 class TemporalBlock(nn.Module):
-    """Temporal block with dilated causal convolution, weight normalization, and residual connection."""
-    
+    """
+    A single TCN residual block.
+
+    Structure
+    ---------
+    Input
+      -> Conv1d (dilated, causal) -> Chomp -> ReLU -> Dropout
+      -> Conv1d (dilated, causal) -> Chomp -> ReLU -> Dropout
+      -> + residual (1x1 conv if channel count changes, else identity)
+      -> ReLU
+    Output
+
+    The residual connection (skip connection) lets gradients flow directly
+    back through the network during training, which helps avoid the vanishing
+    gradient problem in deeper stacks.
+
+    Args:
+        n_inputs    : number of input channels
+        n_outputs   : number of output channels
+        kernel_size : convolution kernel width
+        dilation    : dilation factor -- controls how far back the block looks
+        dropout     : fraction of neurons randomly zeroed during training
+    """
+
     def __init__(
         self,
         n_inputs: int,
         n_outputs: int,
         kernel_size: int,
-        stride: int,
         dilation: int,
-        padding: int,
         dropout: float = 0.2,
     ):
         super().__init__()
-        self.conv1 = nn.Conv1d(
-            n_inputs,
-            n_outputs,
-            kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
+
+        # Padding chosen so that after Chomp, output length == input length
+        padding = (kernel_size - 1) * dilation
+
+        self.block = nn.Sequential(
+            nn.Conv1d(n_inputs,  n_outputs, kernel_size, padding=padding, dilation=dilation),
+            Chomp1d(padding),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+
+            nn.Conv1d(n_outputs, n_outputs, kernel_size, padding=padding, dilation=dilation),
+            Chomp1d(padding),
+            nn.ReLU(),
+            nn.Dropout(dropout),
         )
-        self.chomp1 = Chomp1d(padding)
-        self.relu1 = nn.ReLU()
-        self.dropout1 = nn.Dropout(dropout)
-        
-        self.conv2 = nn.Conv1d(
-            n_outputs,
-            n_outputs,
-            kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
+
+        # Residual path: 1x1 conv aligns channel counts when they differ,
+        # otherwise passes the input straight through unchanged
+        self.residual = (
+            nn.Conv1d(n_inputs, n_outputs, kernel_size=1)
+            if n_inputs != n_outputs
+            else nn.Identity()
         )
-        self.chomp2 = Chomp1d(padding)
-        self.relu2 = nn.ReLU()
-        self.dropout2 = nn.Dropout(dropout)
-        
-        self.net = nn.Sequential(
-            self.conv1, self.chomp1, self.relu1, self.dropout1,
-            self.conv2, self.chomp2, self.relu2, self.dropout2
-        )
-        
-        self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
         self.relu = nn.ReLU()
-        self.init_weights()
-    
-    def init_weights(self):
-        """Initialize weights."""
-        self.conv1.weight.data.normal_(0, 0.01)
-        self.conv2.weight.data.normal_(0, 0.01)
-        if self.downsample is not None:
-            self.downsample.weight.data.normal_(0, 0.01)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass."""
-        out = self.net(x)
-        res = x if self.downsample is None else self.downsample(x)
-        return self.relu(out + res)
+        return self.relu(self.block(x) + self.residual(x))
 
 
-class Chomp1d(nn.Module):
-    """Remove padding from the right side of the input."""
-    
-    def __init__(self, chomp_size: int):
-        super().__init__()
-        self.chomp_size = chomp_size
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x[:, :, :-self.chomp_size].contiguous()
-
-
-class TCN(nn.Module):
-    """
-    Temporal Convolutional Network for sequence classification.
-    
-    Args:
-        num_inputs: Number of input features (e.g., energy bins)
-        num_channels: List of channel sizes for each layer
-        kernel_size: Size of convolutional kernel
-        dropout: Dropout probability
-        num_classes: Number of output classes (default: 1 for binary classification)
-    """
-    
-    def __init__(
-        self,
-        num_inputs: int,
-        num_channels: list[int],
-        kernel_size: int = 3,
-        dropout: float = 0.2,
-        num_classes: int = 1,
-    ):
-        super().__init__()
-        layers = []
-        num_levels = len(num_channels)
-        
-        for i in range(num_levels):
-            dilation_size = 2 ** i
-            in_channels = num_inputs if i == 0 else num_channels[i - 1]
-            out_channels = num_channels[i]
-            
-            padding = (kernel_size - 1) * dilation_size
-            
-            layers += [
-                TemporalBlock(
-                    in_channels,
-                    out_channels,
-                    kernel_size,
-                    stride=1,
-                    dilation=dilation_size,
-                    padding=padding,
-                    dropout=dropout,
-                )
-            ]
-        
-        self.network = nn.Sequential(*layers)
-        
-        # Output layer for binary classification
-        self.fc = nn.Linear(num_channels[-1], num_classes)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass.
-        
-        Args:
-            x: Input tensor of shape (batch, sequence_length, num_inputs)
-        
-        Returns:
-            Output tensor of shape (batch, sequence_length, num_classes)
-        """
-        # TCN expects (batch, channels, sequence_length)
-        x = x.transpose(1, 2)  # (batch, num_inputs, sequence_length)
-        
-        # Pass through TCN layers
-        y = self.network(x)  # (batch, num_channels[-1], sequence_length)
-        
-        # Transpose back to (batch, sequence_length, num_channels[-1])
-        y = y.transpose(1, 2)
-        
-        # Apply output layer
-        output = self.fc(y)  # (batch, sequence_length, num_classes)
-        
-        return output
-
+# ---------------------------------------------------------------------------
+# Full TCN model
+# ---------------------------------------------------------------------------
 
 class BowShockTCN(nn.Module):
     """
-    TCN model specifically for bow shock crossing event detection.
-    
-    This model takes spectrogram data (time, energy) and predicts
-    whether a bow shock crossing event occurs at each time step.
+    TCN for binary bow shock / magnetopause crossing detection.
+
+    Each layer in the stack doubles the dilation, so later layers capture
+    longer-range patterns in the plasma data.
+
+    Args:
+        num_energy_bins : number of input features per timestep (ELS energy bins)
+        num_channels    : output channels for each TCN layer, e.g. [64, 128, 128, 64]
+                          len(num_channels) == number of layers in the stack
+        kernel_size     : convolution kernel width (default 3)
+        dropout         : dropout probability (0.2-0.4 recommended)
+
+    Input  shape: (batch, time_steps, num_energy_bins)
+    Output shape: (batch, time_steps, 1)  -- raw logits
     """
-    
+
     def __init__(
         self,
         num_energy_bins: int = 63,
@@ -172,55 +146,40 @@ class BowShockTCN(nn.Module):
         dropout: float = 0.2,
     ):
         super().__init__()
-        
+
         if num_channels is None:
-            # Default architecture: progressively increase channels
-            num_channels = [64, 128, 256, 128]
-        
-        self.tcn = TCN(
-            num_inputs=num_energy_bins,
-            num_channels=num_channels,
-            kernel_size=kernel_size,
-            dropout=dropout,
-            num_classes=1,
+            # Simpler progression than original [64, 128, 256, 128].
+            # Fewer parameters = less capacity to memorise noise = less overfitting.
+            num_channels = [64, 128, 128, 64]
+
+        # Build the stack of TemporalBlocks
+        layers = []
+        in_channels = num_energy_bins
+        for i, out_channels in enumerate(num_channels):
+            dilation = 2 ** i          # 1, 2, 4, 8 ... grows the receptive field
+            layers.append(
+                TemporalBlock(in_channels, out_channels, kernel_size, dilation, dropout)
+            )
+            in_channels = out_channels
+
+        self.tcn = nn.Sequential(*layers)
+
+        # One output logit per timestep.
+        # Extra Dropout here acts as a final regularisation gate before the prediction.
+        self.output_layer = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(num_channels[-1], 1),
         )
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass.
-        
         Args:
-            x: Input tensor of shape (batch, sequence_length, num_energy_bins)
-        
+            x: (batch, time_steps, energy_bins)
         Returns:
-            Output tensor of shape (batch, sequence_length, 1) with logits
+            logits: (batch, time_steps, 1)
         """
-        return self.tcn(x)
-    
-    def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Predict probabilities.
-        
-        Args:
-            x: Input tensor of shape (batch, sequence_length, num_energy_bins)
-        
-        Returns:
-            Probability tensor of shape (batch, sequence_length, 1)
-        """
-        logits = self.forward(x)
-        return torch.sigmoid(logits)
-    
-    def predict(self, x: torch.Tensor, threshold: float = 0.5) -> torch.Tensor:
-        """
-        Predict binary labels.
-        
-        Args:
-            x: Input tensor of shape (batch, sequence_length, num_energy_bins)
-            threshold: Classification threshold
-        
-        Returns:
-            Binary predictions of shape (batch, sequence_length, 1)
-        """
-        proba = self.predict_proba(x)
-        return (proba > threshold).long()
-
+        # Conv1d expects (batch, channels, time) -- transpose in, then back out
+        x = x.transpose(1, 2)          # -> (batch, energy_bins, time_steps)
+        x = self.tcn(x)                # -> (batch, num_channels[-1], time_steps)
+        x = x.transpose(1, 2)          # -> (batch, time_steps, num_channels[-1])
+        return self.output_layer(x)    # -> (batch, time_steps, 1)
