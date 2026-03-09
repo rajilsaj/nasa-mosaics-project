@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 
 # ========= UPDATE THESE =========
-INDEX_CSV = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\dataset_index_2004.csv"
-OUT_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\preprocess"
+INDEX_CSV = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\dataset_index\dataset_index_2004.csv"
+OUT_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\dataset_index\preprocess"
 # =================================
 
 # Choose how to reduce 8 anodes -> 1 value per energy bin

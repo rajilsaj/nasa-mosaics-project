@@ -3,9 +3,9 @@ import numpy as np
 import pandas as pd
 import yaml
 
-INDEX_CSV = r"C:\Users\roger\OneDrive\Desktop\Cassini New\dataset_index_2004.csv"
-LABEL_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\crossings\labels\labels"
-OUT_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\processed\labels_2004"
+INDEX_CSV = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\dataset_index\dataset_index_2004.csv"
+LABEL_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\zendo-3946033\crossings\labels"
+OUT_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\processed\labels_2004"
 
 WINDOW_MINUTES = 4
 

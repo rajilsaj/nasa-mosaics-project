@@ -3,8 +3,8 @@ import numpy as np
 import joblib 
 from sklearn.preprocessing import StandardScaler
 
-IN_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\windows_2004"
-OUT_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\windows_2004\scaled"
+IN_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\dataset_index\windows_2004"
+OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\dataset_index\windows_2004\scaled"
 SCALER_PATH = os.path.join(OUT_DIR, "scaler.pkl")
 
 os.makedirs(OUT_DIR, exist_ok=True)

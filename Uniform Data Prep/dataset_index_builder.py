@@ -3,9 +3,9 @@ import pandas as pd
 from glob import glob
 
 # -------- UPDATE THESE 3 PATHS --------
-ELS_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\2004"
-BASE_LABEL_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\crossings\labels\labels"
-OUTPUT_CSV = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\dataset_index_2004.csv"
+ELS_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\2004"
+BASE_LABEL_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\zendo-3946033\crossings\labels"
+OUTPUT_CSV = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\dataset_index\dataset_index_2004.csv"
 # -------------------------------------
 
 BS_DIR = os.path.join(BASE_LABEL_DIR, "bs", "all")

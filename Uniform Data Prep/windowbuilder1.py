@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 
 # ===== PATHS =====
-INDEX_CSV = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\dataset_index_2004.csv"
-PREPROCESS_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\preprocess"
-LABEL_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\labels_2004"
-OUT_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\windows_2004"
+INDEX_CSV = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\dataset_index\dataset_index_2004.csv"
+PREPROCESS_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\dataset_index\preprocess"
+LABEL_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\processed\labels_2004"
+OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\dataset_index\windows_2004"
 # =================
 
 WINDOW = 128

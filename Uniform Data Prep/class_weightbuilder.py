@@ -3,7 +3,7 @@ import joblib
 import os
 
 # Path to your scaled dataset
-DATA_DIR = r"C:\Users\roger\OneDrive\Desktop\Cassini New\Spacecraft Data\dataset_index\windows_2004\scaled"
+DATA_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\dataset_index\windows_2004\scaled"
 
 train_y_path = os.path.join(DATA_DIR, "train_y.npy")
 
