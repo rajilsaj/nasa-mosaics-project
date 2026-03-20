@@ -43,7 +43,7 @@ NEGATIVE_SAMPLE_BUFFER = 50  # Buffer around positive events for negative sampli
 # File paths
 #ML_FILE = "ml_ready_vortex_data.csv"
 #JACKSON_FILE = "Jackson_vortex_detections_reformatted_augmented.csv"
-#OUTPUT_DIR = "temporal_splits"
+OUTPUT_DIR = "temporal_splits"
 
 BASE_PATH    = '/content/drive/MyDrive/2026/www/raw/'
 
