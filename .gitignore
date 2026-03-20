@@ -6,3 +6,5 @@ tcn_model_2.0/checkpoints/
 tcn_model/checkpoints/
 data/*
 .venv/
+dataset_index/
+new 2004/
