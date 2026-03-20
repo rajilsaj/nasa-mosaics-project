@@ -13,9 +13,13 @@ Key Features:
 - Model persistence for deployment
 """
 
+import os
+os.environ['MPLBACKEND'] = 'Agg'
+import matplotlib
+matplotlib.use('Agg')
+
 import pandas as pd
 import numpy as np
-import os
 import time
 import joblib
 from datetime import datetime
