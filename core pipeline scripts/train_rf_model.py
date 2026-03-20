@@ -35,13 +35,35 @@ class Config:
     """Training configuration."""
     
     # File paths
-    TRAIN_FILE = "train_features.csv"
-    VAL_FILE = "val_features.csv"
+    #TRAIN_FILE = "train_features.csv"
+    #VAL_FILE = "val_features.csv"
     TEST_FILE = "test_features.csv"
     
     # Output directory
-    OUTPUT_DIR = "models"
-    RESULTS_DIR = "results"
+    #OUTPUT_DIR = "models"
+    #RESULTS_DIR = "results"
+    
+    
+    # Base path to your Drive folder
+    BASE_PATH = '/content/drive/MyDrive/2026/www/raw/'
+
+    # File paths
+    TRAIN_FILE = os.path.join(BASE_PATH, "train_features.csv")
+    VAL_FILE   = os.path.join(BASE_PATH, "val_features.csv")
+    TEST_FILE  = os.path.join(BASE_PATH, "test_features.csv")
+
+    # Output directories
+    OUTPUT_DIR  = os.path.join(BASE_PATH, "models")
+    RESULTS_DIR = os.path.join(BASE_PATH, "results")
+
+    # Create output dirs if they don't exist
+    os.makedirs(OUTPUT_DIR,  exist_ok=True)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    # Verify input files exist
+    for f in [TRAIN_FILE, VAL_FILE, TEST_FILE]:
+        status = "✅ Found" if os.path.exists(f) else "❌ NOT FOUND"
+        print(f"{status}: {f}")
     
     # Random Forest parameters
     RF_PARAMS = {
