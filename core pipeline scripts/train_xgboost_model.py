@@ -9,7 +9,7 @@ Snapdragon-class embedded deployment.
 Pipeline:
 train_features.csv → XGBoost → Evaluation → Save model + metadata
 """
-import seaborn as sns
+
 import pandas as pd
 import numpy as np
 import os
