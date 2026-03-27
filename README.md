@@ -11,7 +11,7 @@ The pipeline is designed so that each script performs one clear stage of preproc
 The full preprocessing workflow is:
 
 1. Build the master index  
-   `python dataset_index_2004.py`
+   `python dataset_index_builder.py`
 
 2. Preprocess into `X_63` + `t_ns`  
    `python preprocess_from_masterindex.py`
