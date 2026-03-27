@@ -5,9 +5,9 @@ from pathlib import Path
 import pandas as pd
 
 # ===== PATHS =====
-ELS_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\new 2004"
-BASE_LABEL_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\data\zendo-3946033\crossings\labels\labels"
-OUTPUT_CSV = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\dataset_index\dataset_index_2004.csv"
+ELS_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\2004"
+BASE_LABEL_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\zenodo-3946033\crossings\labels"
+OUTPUT_CSV = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\dataset_index_2004.csv"
 # =================
 
 BS_DIR = os.path.join(BASE_LABEL_DIR, "bs", "all")

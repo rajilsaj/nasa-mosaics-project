@@ -5,8 +5,8 @@ import pandas as pd
 
 # ===== PATHS =====
 INDEX_CSV = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\dataset_index_2004.csv"
-PREPROCESS_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\dataset_index\preprocess"
-LABEL_DIR = r"C:\Users\PC\Documents\Github\nasa-mosaics-project\dataset_index\processed\labels_2004"
+PREPROCESS_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\preprocess"
+LABEL_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\labels_2004_2"
 OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\windows_2004"
 # =================
 
