@@ -2,7 +2,7 @@
 
 This preprocessing pipeline prepares the ELS Cassini crossing dataset for model training. It takes raw indexed data, engineers the feature matrix, builds dense labels, converts the data into training windows, scales the features, and computes class weights for imbalanced learning.
 
-The pipeline is designed so that each script performs one clear stage of preprocessing, and the output of one stage becomes the input to the next. Running the scripts in order is important.
+The pipeline is designed so that each script performs one clear stage of preprocessing, and the output of one stage becomes the input to the next. Running the scripts in order is important. (Don't forget to change the file path's to your specific path's.) 
 
 ---
 
