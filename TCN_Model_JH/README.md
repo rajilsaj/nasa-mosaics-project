@@ -21,20 +21,38 @@ The model outputs a binary prediction per timestep: `0 = no crossing`, `1 = cros
 ```
 project/
 │
-├── data/
-│   ├── processed/2004/        # Raw .nc files from Cassini ELS instrument
-│   ├── new_processed/         # Labelled .nc files (output of add_crossing_event_new.py)
-│   └── zenodo-3946033/
-│       └── crossings/labels/  # YAML files with expert-annotated crossing timestamps
-│           ├── bs/all/        # Bow shock crossings  → label 1
-│           ├── mp/all/        # Magnetopause crossings → label 1
-│           ├── dg/            # Data gaps  → files excluded from training
-│           └── sc/            # Spacecraft manoeuvres → files excluded from training
+├── dataset_index/
+│   ├── dataset_index_2004.csv     # Master index of all ELS files with split + label info
+│   ├── preprocess/                # Per-file log-scaled arrays (_t_ns.npy, _X_63.npy)
+│   ├── processed/labels_2004/    # Per-file label arrays (_y.npy)
+│   └── windows_2004/
+│       └── scaled/                # Final train/val/test window arrays ← model reads these
+│           ├── train_X.npy        # shape (N, 128, 63)  float32
+│           ├── train_y.npy        # shape (N,)          uint8
+│           ├── val_X.npy
+│           ├── val_y.npy
+│           ├── test_X.npy
+│           └── test_y.npy
 │
-├── add_crossing_event_new.py  # Step 1: attach labels to .nc files
-├── data_loader.py             # Step 2: PyTorch dataset and DataLoader
-├── train.py                   # Step 3: train the TCN model
-├── inference.py               # Step 4: run predictions on new files
+├── data/
+│   └── zenodo-3946033/
+│       └── crossings/labels/      # YAML files with expert-annotated crossing timestamps
+│           ├── bs/all/            # Bow shock crossings  → label 1
+│           ├── mp/all/            # Magnetopause crossings → label 1
+│           ├── dg/                # Data gaps  → files excluded from training
+│           └── sc/                # Spacecraft manoeuvres → files excluded from training
+│
+├── dataset_index_builder.py   # Step 1: build the master CSV index
+├── preprocess_from_masterindex.py  # Step 2: log-scale raw CSVs → .npy arrays
+├── labelbuilder_2004.py       # Step 3: attach crossing labels → _y.npy files
+├── windowbuilder.py           # Step 4: cut windows + train/val/test split → windows_2004/
+├── fit_scaler.py              # Step 5: z-score normalise windows → windows_2004/scaled/
+├── class_weightbuilder.py     # Step 6: compute class weights for loss function
+│
+├── data_loader.py             # Loads pre-built .npy windows for training
+├── train.py                   # Train the TCN model
+├── tcn_model.py               # TCN architecture
+├── inference.py               # Run predictions on new files
 ├── requirements.txt
 └── README.md
 ```
@@ -48,16 +66,34 @@ project/
 pip install -r requirements.txt
 ```
 
-### 2. Add crossing labels to raw .nc files
-This reads the Zenodo YAML labels and writes a `crossing_event` variable into each `.nc` file. Files flagged as data gaps (`dg/`) or spacecraft manoeuvres (`sc/`) are skipped entirely.
+### 2. Build the data pipeline
+Run these scripts in order. Each step reads from the previous step's output.
+
 ```bash
-python add_crossing_event_new.py
+# Step 1 — build the master file index (CSV with split + label assignments)
+python dataset_index_builder.py
+
+# Step 2 — log-scale raw CSV files into per-file .npy arrays
+python preprocess_from_masterindex.py
+
+# Step 3 — generate per-timestep labels from the Zenodo YAML crossing annotations
+python labelbuilder_2004.py
+
+# Step 4 — cut sliding windows and split into train / val / test
+python windowbuilder.py
+
+# Step 5 — z-score normalise the windows (fit on train, apply to all)
+python fit_scaler.py
+
+# Step 6 — compute class weights (used by train.py for the loss function)
+python class_weightbuilder.py
 ```
-Output goes to `data/new_processed/`.
+
+Output goes to `dataset_index/windows_2004/scaled/`.
 
 ### 3. Train the model
 ```bash
-python train.py --data-dir data/new_processed
+python train.py --data-dir dataset_index/windows_2004/scaled
 ```
 The best checkpoint (by validation F1) is saved to `checkpoints/best_model.pt`.
 
@@ -74,144 +110,93 @@ python inference.py --model checkpoints/best_model.pt --input path/to/folder/ --
 
 ## Data Pipeline
 
-Raw `.nc` files → label attachment → sliding windows → train/val/test split → model training.
+Raw CSV files → log-scaling → label attachment → adaptive sliding windows → z-score normalisation → model training.
 
-The full pipeline is documented in `Data_Preparation_Roadmap.docx`. Key decisions:
+Key decisions:
 
 | Decision | Choice | Why |
 |---|---|---|
 | Label source | `bs/all/` and `mp/all/` | Both crossing directions combined — more training samples |
 | Exclusions | `dg/` and `sc/` files | Corrupt data would teach the model wrong patterns |
+| Anode reduction | Sum across 8 anodes | Collapses (time, 63, 8) → (time, 63) while preserving total counts |
 | Preprocessing | log10 then z-score normalisation | ELS counts span many orders of magnitude |
 | Window size | 128 timesteps (~17 min) | Long enough to capture approach + crossing + departure |
 | Window label | Centre timestep | Cleanest approach for change-point detection |
-| Imbalance fix | Crossing-centred sliding windows + pos_weight | Preserves temporal structure; no synthetic data |
+| Imbalance fix | Adaptive stride + pos_weight | Dense sampling near crossings, sparse sampling elsewhere |
 | Train/val/test split | By day of year | Prevents leakage across orbit crossings |
 
 **Split:** Train = days 1–270 (Jan–Sep) · Val = days 271–335 (Oct–Nov) · Test = days 336–366 (Dec)
 
 ---
 
-## Crossing-Centred Sliding Window
+## Adaptive Sliding Window
 
 Crossing events are rare — without special handling the model sees thousands of
 background windows for every one crossing window and learns to always predict
-"no crossing". The sliding window strategy fixes this without generating fake data.
+"no crossing". The adaptive sliding window in `windowbuilder.py` fixes this without generating fake data.
 
 ### How it works
 
-For every file, the data loader makes two passes:
+For each file, a single pass builds windows with a stride that changes depending on proximity to a crossing:
 
-**Pass 1 — Crossing-centred windows**
+- **Near a crossing** (within `NEAR_RADIUS` timesteps): small stride (`STRIDE_NEAR = 4`, ~32 s) — dense overlapping windows so the model sees the event from many angles
+- **Away from a crossing**: large stride (`STRIDE_FAR = 16`, ~2 min) — sparse sampling to keep background windows manageable
 
-Each crossing event in the file is located and its midpoint is found. A context
-region is then defined extending `context_hours` hours before and after that
-midpoint. A sliding window of length `sequence_length` sweeps across this region
-with a small step size (`crossing_stride`), producing many overlapping windows.
-Each window is labelled by its own centre timestep — windows sitting on the
-crossing get label 1, windows in the surrounding context get label 0. This gives
-the model dense coverage of what the plasma looks like approaching, during, and
-departing each boundary.
+Each window is labelled by its own centre timestep: `1` if a crossing is occurring at that point, `0` otherwise.
 
 ```
 File timeline:
 ──────────────────[===crossing===]──────────────────
-         ↑                              ↑
-  midpoint - context_hours       midpoint + context_hours
+                ↑               ↑
+         centre - NEAR_RADIUS   centre + NEAR_RADIUS
 
-Sliding window sweeps this region with step = crossing_stride:
-  [window 1   ] label = 0  (pre-crossing context)
-    [window 2   ] label = 0
-      [window 3   ] label = 1  (centre lands on crossing)
-        [window 4   ] label = 1
-          [window 5   ] label = 0  (post-crossing context)
-            ...
-```
-
-**Pass 2 — Background windows**
-
-A standard sliding window sweeps the whole file with a larger step size
-(`background_stride`). These windows are almost entirely label 0 and represent
-normal solar wind or magnetosphere interior conditions.
-
-### Controlling the window size and density
-
-All three parameters below can be set at the command line when running `train.py`:
-
-| Parameter | Flag | Default | Effect |
-|---|---|---|---|
-| Context size | `--context-hours` | `24` | Hours of data each side of the crossing midpoint. Increase to give the model more pre/post context; decrease to focus tightly on the event. |
-| Crossing stride | `--crossing-stride` | `4` | Timestep advance between windows inside the context region (~32 s at default). Smaller = more crossing windows = better class balance. |
-| Background stride | `--stride` | `16` | Timestep advance between background windows (~2 min at default). Larger = fewer background windows = better class balance. |
-
-At 8 s cadence: 1 hour = 450 timesteps, so `--context-hours 24` covers
-roughly 10 800 timesteps either side of the crossing midpoint.
-
-### Example commands
-
-Default settings — 24 h context, ~32 s crossing step, ~2 min background step:
-```bash
-python train.py --data-dir data/new_processed
-```
-
-Tighter context around the crossing (6 h each side), denser crossing sampling:
-```bash
-python train.py --data-dir data/new_processed \
-    --context-hours 6 \
-    --crossing-stride 2
-```
-
-Wide context (48 h each side) to capture long-range plasma changes before the boundary:
-```bash
-python train.py --data-dir data/new_processed \
-    --context-hours 48 \
-    --crossing-stride 8 \
-    --stride 32
-```
-
-Quick test run on a small subset of files:
-```bash
-python train.py --data-dir data/new_processed \
-    --max-files 10 \
-    --context-hours 12 \
-    --epochs 5
+Dense windows (STRIDE_NEAR):        Sparse windows (STRIDE_FAR):
+  [w1] [w2] [w3] [w4] [w5] ...      [w ]    [w ]    [w ]  ...
 ```
 
 ### Checking your class balance
 
-After the data loader builds the dataset it prints a balance summary:
+After `windowbuilder.py` finishes it prints a balance summary per split:
 
 ```
-  Dataset built — background: 48200, crossing: 3100  (ratio 15.5:1)
-  Recommended pos_weight for BCEWithLogitsLoss = 15.5
+TRAIN:
+  windows: 52400
+  positives: 3100
+  positive fraction: 0.059
 ```
 
-If the ratio is very high (above ~50:1) try reducing `--stride` or increasing
-`--context-hours` to bring more crossing windows into the training set.
+After `data_loader.py` loads the data it also reports:
+
+```
+  Dataset built — background: 49300, crossing: 3100 (ratio 15.9:1)
+```
+
+If the ratio is very high (above ~50:1) try reducing `STRIDE_FAR` or increasing `NEAR_RADIUS` in `windowbuilder.py` to bring more crossing-adjacent windows into the training set.
 
 ---
 
 ## Training Options
 
-| Flag | Default | Description |
-|---|---|---|
-| `--data-dir` | `data/new_processed` | Path to labelled `.nc` files |
-| `--sequence-length` | `128` | Timesteps per window (~17 min) |
-| `--stride` | `16` | Background window slide step (~2 min) |
-| `--context-hours` | `24` | Hours each side of crossing midpoint for dense sampling |
-| `--crossing-stride` | `4` | Crossing window slide step (~32 s) |
-| `--batch-size` | `32` | Sequences per training batch |
-| `--epochs` | `50` | Training epochs |
-| `--lr` | `1e-3` | Learning rate |
-| `--dropout` | `0.2` | Dropout regularisation |
-| `--num-channels` | `64 128 256 128` | TCN channel sizes per layer |
-| `--max-files` | None | Cap number of files (useful for quick tests) |
+| Flag | Required | Default | Description |
+|---|---|---|---|
+| `--data-dir` | ✅ yes | — | Path to folder containing the six `.npy` window files |
+| `--batch-size` | no | `32` | Sequences per training batch |
+| `--epochs` | no | `50` | Training epochs |
+| `--lr` | no | `1e-3` | Learning rate |
+| `--dropout` | no | `0.2` | Dropout regularisation |
+| `--num-channels` | no | `64 128 256 128` | TCN channel sizes per layer |
+| `--device` | no | `auto` | `cpu`, `cuda`, or `auto` |
+
+Example:
+```bash
+python train.py --data-dir dataset_index/windows_2004/scaled --epochs 30 --batch-size 64
+```
 
 ---
 
 ## Model Output
 
-The model outputs a crossing probability (0–1) for each timestep. A timestep is classified as a crossing when the probability exceeds 0.5 (adjustable with `--threshold`).
+The model outputs a crossing probability (0–1) for each timestep. A timestep is classified as a crossing when the probability exceeds 0.5 (adjustable with `--threshold` in `inference.py`).
 
 Training is evaluated using **F1 score** — this is more informative than accuracy when crossings are rare, because a model that always predicts "no crossing" would have high accuracy but zero F1.
 
@@ -219,7 +204,11 @@ Training is evaluated using **F1 score** — this is more informative than accur
 
 ## Scaling to 2004–2012
 
-The pipeline is designed to scale. When the full multi-year dataset is available, only one change is needed — replace the day-of-year split in `data_loader.py` with a year-based split:
+The pipeline is designed to scale. When the full multi-year dataset is available, two changes are needed:
+
+**1.** Update the paths in each preprocessing script to point at the full dataset.
+
+**2.** Replace the day-of-year split in `dataset_index_builder.py` with a year-based split:
 
 | Split | Years |
 |---|---|
@@ -227,10 +216,10 @@ The pipeline is designed to scale. When the full multi-year dataset is available
 | Val | 2010–2011 |
 | Test | 2012 |
 
-All other code remains unchanged.
+All model and training code remains unchanged.
 
 ---
 
 ## Requirements
 
-Python 3.10+ · See `requirements.txt` for full list. Core dependencies: `torch`, `xarray`, `numpy`, `scikit-learn`, `matplotlib`.
+Python 3.10+ · See `requirements.txt` for full list. Core dependencies: `torch`, `numpy`, `pandas`, `scikit-learn`, `matplotlib`, `pyyaml`.

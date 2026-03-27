@@ -66,7 +66,7 @@ def predict_file(
         predictions : binary int array  (n_time,)
         probs       : float array       (n_time,)
     """
-    counts, times = load_nc_data(nc_path)   # already log-scaled
+    counts, _, times = load_nc_data(nc_path)  # _ discards labels, we don't need them at inference
 
     # Per-energy-bin normalization
     if normalize_mean is None:

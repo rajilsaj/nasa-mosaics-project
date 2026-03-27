@@ -91,45 +91,31 @@ def run_epoch(
 # ---------------------------------------------------------------------------
 
 def main():
-    script_dir   = Path(__file__).parent
-    project_root = script_dir.parent
-
     parser = argparse.ArgumentParser(description="Train TCN for bow shock detection")
 
     # ---- Data ----
     parser.add_argument(
         "--data-dir",
-        default=str(project_root / "data" / "new_processed"),
-        help="Path to new_processed/ directory containing labelled .nc files",
+        required=True,
+        help="Path to folder containing train_X.npy, train_y.npy, val_X.npy, etc.",
     )
     parser.add_argument(
         "--output-dir",
-        default=str(script_dir / "checkpoints"),
+        default="checkpoints",
+        help="Where to save model checkpoints",
     )
 
-    # ---- Window ----
-    parser.add_argument("--sequence-length",  type=int,   default=128,
-                        help="Timesteps per window (~17 min at 8s cadence)")
-    parser.add_argument("--stride",           type=int,   default=16,
-                        help="Background window slide step (~2 min at 8s cadence)")
-    parser.add_argument("--context-hours",    type=float, default=24.0,
-                        help="Hours each side of a crossing midpoint for dense sampling")
-    parser.add_argument("--crossing-stride",  type=int,   default=4,
-                        help="Slide step inside the crossing context region (~32s)")
-
     # ---- Training ----
-    parser.add_argument("--batch-size",       type=int,   default=32)
-    parser.add_argument("--epochs",           type=int,   default=50)
-    parser.add_argument("--lr",               type=float, default=1e-3)
+    parser.add_argument("--batch-size", type=int,   default=32)
+    parser.add_argument("--epochs",     type=int,   default=50)
+    parser.add_argument("--lr",         type=float, default=1e-3)
 
     # ---- Model ----
-    parser.add_argument("--dropout",          type=float, default=0.2)
-    parser.add_argument("--num-channels",     type=int, nargs="+", default=[64, 128, 256, 128])
+    parser.add_argument("--dropout",      type=float, default=0.2)
+    parser.add_argument("--num-channels", type=int, nargs="+", default=[64, 128, 256, 128])
 
     # ---- Misc ----
-    parser.add_argument("--max-files",            type=int, default=None)
-    parser.add_argument("--max-samples-per-file", type=int, default=None)
-    parser.add_argument("--device",               default="auto")
+    parser.add_argument("--device", default="auto")
 
     args = parser.parse_args()
 
@@ -144,25 +130,17 @@ def main():
 
     # --- Data -------------------------------------------------------------
     train_loader, val_loader, test_loader = create_data_loaders(
-        processed_dir        = Path(args.data_dir),
-        sequence_length      = args.sequence_length,
-        background_stride    = args.stride,
-        context_hours        = args.context_hours,
-        crossing_stride      = args.crossing_stride,
-        batch_size           = args.batch_size,
-        max_files            = args.max_files,
-        max_samples_per_file = args.max_samples_per_file,
+        data_dir    = Path(args.data_dir),
+        batch_size  = args.batch_size,
     )
 
     # --- Class-weighted loss ----------------------------------------------
     # pos_weight tells the loss how much more to penalise missed crossings
-    # vs false alarms.  The raw ratio (54x here) is too aggressive — it
-    # causes the model to predict crossing everywhere just to avoid any
-    # crossing penalty.  Capping at 10 keeps pressure on recall without
-    # destroying precision.
-    n_none     = int((train_loader.dataset.labels == 0).sum())
-    n_crossing = int((train_loader.dataset.labels == 1).sum())
-    raw_weight = n_none / max(n_crossing, 1)
+    # vs false alarms.  Raw ratio is capped at 10 — too high a value causes
+    # the model to predict crossing everywhere just to avoid the penalty.
+    n_none     = int((train_loader.dataset.y == 0).sum())
+    n_crossing = int((train_loader.dataset.y == 1).sum())
+    raw_weight    = n_none / max(n_crossing, 1)
     capped_weight = min(raw_weight, 10.0)
 
     print(f"Class counts  — none: {n_none}, crossing: {n_crossing}")
@@ -170,11 +148,8 @@ def main():
 
     pos_weight = torch.tensor([capped_weight], dtype=torch.float).to(device)
 
-    # Weighted criterion used only during training
     train_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-
-    # Plain criterion used for val/test — keeps loss values comparable
-    eval_criterion = nn.BCEWithLogitsLoss()
+    eval_criterion  = nn.BCEWithLogitsLoss()
 
     # --- Model ------------------------------------------------------------
     sample_seq, _ = next(iter(train_loader))
@@ -199,11 +174,8 @@ def main():
     history = {"train": [], "val": []}
 
     for epoch in range(1, args.epochs + 1):
-        # Training uses weighted loss to push recall up
         train_m = run_epoch(model, train_loader, train_criterion, device, optimizer)
-
-        # Val uses plain loss so numbers are stable and comparable epoch to epoch
-        val_m   = run_epoch(model, val_loader, eval_criterion, device)
+        val_m   = run_epoch(model, val_loader,   eval_criterion,  device)
         scheduler.step(val_m["loss"])
 
         history["train"].append(train_m)
