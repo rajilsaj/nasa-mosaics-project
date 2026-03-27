@@ -47,23 +47,8 @@ class WindowDataset(Dataset):
         self,
         X: np.ndarray,
         y: np.ndarray,
-        mean: np.ndarray | None = None,
-        std:  np.ndarray | None = None,
     ):
-        # Fit normalisation stats on this split if not provided (training set)
-        if mean is None or std is None:
-            flat = X.reshape(-1, X.shape[2])        # (N*T, energy_bins)
-            mean = flat.mean(axis=0)
-            std  = flat.std(axis=0)
-            std  = np.where(std < 1e-8, 1.0, std)  # avoid divide-by-zero
-
-        self.mean = mean
-        self.std  = std
-
-        # Apply z-score normalisation
-        self.X = ((X - mean) / std).astype(np.float32)
-        self.X = np.nan_to_num(self.X, nan=0.0)
-        self.y = y.astype(np.int64)
+        self.X = np.nan_to_num(X, nan=0.0).astype(np.float32)
 
         # Report class balance so you can spot imbalance problems early
         n_cross = int((self.y == 1).sum())
@@ -122,10 +107,10 @@ def create_data_loaders(
     train_ds = WindowDataset(train_X, train_y)
 
     print("Building val dataset...")
-    val_ds = WindowDataset(val_X, val_y, mean=train_ds.mean, std=train_ds.std)
+    val_ds = WindowDataset(val_X, val_y)
 
     print("Building test dataset...")
-    test_ds = WindowDataset(test_X, test_y, mean=train_ds.mean, std=train_ds.std)
+    test_ds = WindowDataset(test_X, test_y)
 
     # ---- Class balance info for loss weighting -----------------------
     n_none     = int((train_ds.y == 0).sum())
