@@ -90,7 +90,7 @@ def main() -> None:
             continue
 
         t_ns = np.load(t_path)
-        t = pd.to_datetime(t_ns, unit='us', utc=True)
+        t = pd.to_datetime(t_ns, unit='ns', utc=True)
 
         if LABEL_MODE == "multiclass":
             y = np.zeros(len(t), dtype=np.uint8)

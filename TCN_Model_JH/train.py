@@ -143,7 +143,7 @@ def main():
     print(f"Loaded class weights: {class_weights}")
     print(f"Using pos_weight: {pos_weight_val:.2f}")
 
-    train_criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_val]))
+    train_criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_val]).to(device))
     eval_criterion  = nn.BCEWithLogitsLoss()
 
     # --- Model ------------------------------------------------------------
