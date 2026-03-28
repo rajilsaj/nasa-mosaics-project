@@ -14,8 +14,7 @@ split are already done — this loader just normalises and wraps in DataLoaders.
 
 Normalisation
 -------------
-Mean and std are computed from the training set only, then applied to
-val and test.  This prevents data leakage (val/test stats influencing training).
+Done by the preprocess pipeline
 """
 
 from __future__ import annotations
@@ -49,6 +48,7 @@ class WindowDataset(Dataset):
         y: np.ndarray,
     ):
         self.X = np.nan_to_num(X, nan=0.0).astype(np.float32)
+        self.y = y.astype(np.int64)
 
         # Report class balance so you can spot imbalance problems early
         n_cross = int((self.y == 1).sum())

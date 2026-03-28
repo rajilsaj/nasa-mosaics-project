@@ -9,8 +9,6 @@ torch>=2.2.0                # Neural network training and inference
 
 # --- Data handling ------------------------------------------------------
 numpy>=1.26.0               # Array maths — the backbone of the pipeline
-xarray>=2024.1.0            # Loads and saves NetCDF (.nc) files
-netCDF4>=1.6.5              # Backend engine used by xarray for .nc files
 PyYAML>=6.0.3               # For preprocessing labelbuilder
 
 # --- Machine learning utilities -----------------------------------------

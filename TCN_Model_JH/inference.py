@@ -1,8 +1,8 @@
 """
-Inference script — predict bow shock crossings on new NetCDF files.
+Inference script — predict bow shock crossings on preprocessed .npy files.
 
 Usage:
-    python inference.py --model checkpoints/best_model.pt --input path/to/file.nc
+    python inference.py --model checkpoints/best_model.pt --input path/to/file_X_63.npy
     python inference.py --model checkpoints/best_model.pt --input path/to/folder/
 """
 
@@ -15,9 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-import xarray as xr
+import joblib
 
-from data_loader import load_nc_data
 from tcn_model import BowShockTCN
 
 
@@ -46,35 +45,25 @@ def load_model(checkpoint_path: Path, device: torch.device) -> tuple[BowShockTCN
 
 def predict_file(
     model: BowShockTCN,
-    nc_path: Path,
+    X: np.ndarray,         # shape (time, 63)
+    t_ns: np.ndarray,      # microsecond timestamps
     device: torch.device,
     sequence_length: int = 100,
     stride: int = 10,
     threshold: float = 0.5,
     normalize_mean: Optional[np.ndarray] = None,
     normalize_std:  Optional[np.ndarray] = None,
+    scaler_path=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Run the model on a single NetCDF file using a sliding window.
-
-    Normalization uses per-energy-bin arrays (same as training).
-    If not provided they are estimated from this file alone — less accurate,
-    so pass the training stats when available.
-
-    Returns:
-        times       : datetime64 array  (n_time,)
-        predictions : binary int array  (n_time,)
-        probs       : float array       (n_time,)
-    """
-    counts, _, times = load_nc_data(nc_path)  # _ discards labels, we don't need them at inference
-
+    
+    times = pd.to_datetime(t_ns, unit="us", utc=True)   # define times from t_ns
     # Per-energy-bin normalization
     if normalize_mean is None:
-        normalize_mean = counts.mean(axis=0)
-        normalize_std  = counts.std(axis=0)
-        normalize_std  = np.where(normalize_std < 1e-8, 1.0, normalize_std)
+        scaler = joblib.load(Path(scaler_path))  # load from CLI arg
+        normalize_mean = scaler.mean_
+        normalize_std = scaler.scale_
 
-    counts = (counts - normalize_mean) / normalize_std
+    counts = (X - normalize_mean) / normalize_std
     counts = np.nan_to_num(counts, nan=0.0)
 
     # Build sliding windows
@@ -114,39 +103,29 @@ def predict_file(
 # ---------------------------------------------------------------------------
 
 def plot_predictions(
-    nc_path: Path,
+    file_key: str,
+    X: np.ndarray,
     times: np.ndarray,
     predictions: np.ndarray,
     probabilities: np.ndarray,
-    output_path: Optional[Path] = None,
+    output_path=None,
 ):
-    """Plot the spectrogram alongside the model's prediction probabilities."""
-    ds     = xr.open_dataset(nc_path)
-    counts = ds["count_rate"].values.astype(float)
-    counts[counts == 65535.0] = np.nan
-    if counts.ndim == 3:
-        counts = np.nanmean(counts, axis=2)
-    counts = np.nan_to_num(counts, nan=0.0)
-
-    energy    = ds["energy"].values
-    times_dt  = pd.to_datetime(times).to_pydatetime()
-    ds.close()
+    # X shape: (time, 63) — already loaded, no file access needed
+    times_dt = times.to_pydatetime()
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
 
-    # Spectrogram
-    vmin = max(1.0, counts[counts > 0].min()) if (counts > 0).any() else 1.0
+    # Spectrogram from npy array
+    vmin = max(1e-6, X[X > 0].min()) if (X > 0).any() else 1e-6
     im = ax1.pcolormesh(
-        times_dt, energy, counts.T,
+        times_dt, np.arange(63), X.T,
         shading="auto", cmap="viridis",
-        norm=plt.matplotlib.colors.LogNorm(vmin=vmin, vmax=counts.max()),
     )
-    ax1.set_ylabel("Energy (eV/q)")
-    ax1.set_yscale("log")
-    ax1.set_title(f"Spectrogram — {nc_path.name}")
-    plt.colorbar(im, ax=ax1, label="Counts / s")
+    ax1.set_ylabel("Energy bin")
+    ax1.set_title(f"Spectrogram — {file_key}")
+    plt.colorbar(im, ax=ax1, label="log10 counts")
 
-    # Probabilities / predictions
+    # Probabilities / predictions (unchanged)
     ax2.plot(times_dt, probabilities, color="steelblue", alpha=0.8, label="Probability")
     ax2.fill_between(times_dt, 0, predictions, alpha=0.25, color="red", label="Predicted event")
     ax2.axhline(0.5, color="gray", linestyle="--", alpha=0.5, label="Threshold 0.5")
@@ -159,7 +138,6 @@ def plot_predictions(
     plt.setp(ax2.get_xticklabels(), rotation=30, ha="right")
 
     plt.tight_layout()
-
     if output_path:
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
         print(f"  Saved → {output_path}")
@@ -179,6 +157,7 @@ def main():
     parser.add_argument("--sequence-length", type=int,   default=100)
     parser.add_argument("--stride",          type=int,   default=10)
     parser.add_argument("--threshold",       type=float, default=0.5)
+    parser.add_argument("--scaler", required=True, help="Path to scaler.pkl from fit_scaler.py")
     parser.add_argument("--device",          default="auto")
     args = parser.parse_args()
 
@@ -193,26 +172,38 @@ def main():
     print(f"Loaded model from {checkpoint_path}")
 
     input_path = Path(args.input)
-    nc_files   = [input_path] if input_path.is_file() else sorted(input_path.rglob("*.nc"))
-    if not nc_files:
-        raise ValueError(f"No .nc files found in {input_path}")
+    npy_files = sorted(input_path.rglob("*_X_63.npy")) if input_path.is_dir() else [input_path]
+    if not npy_files:
+        raise ValueError(f"No _X_63.npy files found in {input_path}")
 
     output_dir = Path(args.output) if args.output else None
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    for nc_path in nc_files:
-        print(f"\nProcessing {nc_path.name}")
+    for x_path in npy_files:
+        file_key = x_path.stem.replace("_X_63", "")
+        t_path = x_path.parent / f"{file_key}_t_ns.npy"
+
+        if not t_path.exists():
+            print(f"  Skipping {file_key} — missing t_ns file")
+            continue
+
+        print(f"\nProcessing {file_key}")
         try:
+            X = np.load(x_path)
+            t_ns = np.load(t_path)
+
             times, preds, probs = predict_file(
-                model, nc_path, device,
+                model, X, t_ns, device,
                 sequence_length=args.sequence_length,
                 stride=args.stride,
                 threshold=args.threshold,
             )
+
             print(f"  Predicted events at {preds.sum()} time steps")
-            out = output_dir / f"{nc_path.stem}_predictions.png" if output_dir else None
-            plot_predictions(nc_path, times, preds, probs, out)
+            out = output_dir / f"{file_key}_predictions.png" if output_dir else None
+            plot_predictions(file_key, X, times, preds, probs, out)
+
         except Exception as e:
             print(f"  Error: {e}")
 

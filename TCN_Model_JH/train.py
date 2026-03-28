@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Dict
+import joblib
 
 import numpy as np
 import torch
@@ -134,21 +135,15 @@ def main():
         batch_size  = args.batch_size,
     )
 
-    # --- Class-weighted loss ----------------------------------------------
-    # pos_weight tells the loss how much more to penalise missed crossings
-    # vs false alarms.  Raw ratio is capped at 10 — too high a value causes
-    # the model to predict crossing everywhere just to avoid the penalty.
-    n_none     = int((train_loader.dataset.y == 0).sum())
-    n_crossing = int((train_loader.dataset.y == 1).sum())
-    raw_weight    = n_none / max(n_crossing, 1)
-    capped_weight = min(raw_weight, 10.0)
+    # ------ Weight from preporcess pipeline loader-------------------------
+    # Loads the .pk1 file that is created from the pre preprocess pipeline
+    class_weights = joblib.load(Path(args.data_dir) / "class_weights.pkl")
+    pos_weight_val = min(class_weights[1], 10.0)  # Class 1 = crossing, cap at 10
 
-    print(f"Class counts  — none: {n_none}, crossing: {n_crossing}")
-    print(f"Raw ratio     : {raw_weight:.1f}  →  capped pos_weight: {capped_weight:.1f}")
+    print(f"Loaded class weights: {class_weights}")
+    print(f"Using pos_weight: {pos_weight_val:.2f}")
 
-    pos_weight = torch.tensor([capped_weight], dtype=torch.float).to(device)
-
-    train_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    train_criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_val]))
     eval_criterion  = nn.BCEWithLogitsLoss()
 
     # --- Model ------------------------------------------------------------
