@@ -8,6 +8,7 @@ import xarray as xr
 import numpy as np
 from pathlib import Path
 from datetime import datetime
+import pandas as pd
 
 def parse_yaml_labels(yaml_path):
     """
@@ -78,13 +79,18 @@ def create_crossing_event_variable(ds, yaml_labels=None):
                     cp_dt = datetime.strptime(cp_str, '%d-%m-%Y/%H:%M:%S')
                     
                     # Find the dataset row (time index) with UTC closest to this YAML UTC
-                    time_array = ds['time'].values  # UTC timestamps from dataset
-                    time_diffs = np.abs(time_array - np.datetime64(cp_dt))
-                    closest_idx = np.argmin(time_diffs)
+                      # UTC timestamps from dataset
+                    time_array_dt = pd.to_datetime(ds['time'].values)
+
+                    # Build a ±4 minute window around the change point
+                    HALF_WINDOW = pd.Timedelta(minutes=4)
+                    mask = (time_array_dt >= cp_dt - HALF_WINDOW) & \
+                            (time_array_dt <= cp_dt + HALF_WINDOW)
+
+                    # Mark every row inside that window as a crossing event
+                    crossing_events[mask] = 1
+                    print(f"    UTC match found: {mask.sum()} rows near {cp_str} -> crossing_event=1")
                     
-                    # Mark this row as having a crossing event (set to 1 = True)
-                    crossing_events[closest_idx] = 1
-                    print(f"    UTC match found: Row {closest_idx} - {cp_str} -> crossing_event=True")
                 except Exception as e:
                     print(f"  Warning: Could not parse UTC time '{cp_str}': {e}")
     
@@ -139,8 +145,12 @@ def process_nc_file(input_path, output_path, labels_dir=None):
     # Try to load YAML labels if labels_dir provided
     yaml_labels = None
     if labels_dir:
-        yaml_path = labels_dir / f"{input_path.stem}.yaml"
-        yaml_labels = parse_yaml_labels(yaml_path)
+        yaml_path = next(
+            (d / f"{input_path.stem}.yaml" for d in labels_dir
+            if (d / f"{input_path.stem}.yaml").exists()),
+            None
+        )
+        yaml_labels = parse_yaml_labels(yaml_path) if yaml_path else None
         if yaml_labels:
             print(f"  Found labels for {input_path.name}")
     
@@ -173,9 +183,10 @@ def main():
     # Define paths
     processed_dir = Path("./data/processed")
     new_processed_dir = Path("./data/new_processed")
-    labels_dir = Path("/MOSAICS_SHARE/data/zenodo-3946033/crossings/labels/mp/all/",
-                    "/MOSAICS_SHARE/data/zenodo-3946033/crossings/labels/bs/all/")
-    
+    labels_dirs = [
+    Path("/MOSAICS_SHARE/data/zenodo-3946033/crossings/labels/mp/all/"),
+    Path("/MOSAICS_SHARE/data/zenodo-3946033/crossings/labels/bs/all/"),
+    ]
     # Optional: set to None if you don't want to use YAML labels
     # If None, all crossing_event values will be 0 (False)
     # If labels_dir provided, crossing_event is 0 by default and set to 1 ONLY at yaml change_point times
@@ -214,9 +225,13 @@ def main():
         try:
             # Check if labels exist before processing
             has_labels = False
-            if labels_dir:
-                yaml_path = labels_dir / f"{nc_path.stem}.yaml"
-                if yaml_path.exists():
+            if labels_dirs:
+                yaml_path = next(
+                    (d / f"{nc_path.stem}.yaml" for d in labels_dirs
+                    if (d / f"{nc_path.stem}.yaml").exists()),
+                    None
+                )
+                if yaml_path:
                     has_labels = True
                     files_with_labels += 1
                 else:
