@@ -28,11 +28,14 @@ def get_doy(file_key: str) -> int:
     # ELS_200417906_V01 -> 179
     return int(file_key[8:11])
 
+def get_year(file_key: str) -> int:
+    # ELS_200417906_V01 -> 2004
+    return int(file_key[4:8])
 
-def get_split(doy: int) -> str:
-    if doy <= 270:
+def get_split(year: int) -> str:
+    if year <= 2008:
         return "train"
-    if doy <= 335:
+    if year <= 2011:
         return "val"
     return "test"
 
@@ -60,6 +63,7 @@ def main() -> None:
         filename = os.path.basename(file_path)
         file_key = filename.replace("_raw.csv", "")
         doy = get_doy(file_key)
+        year = get_year(file_key)
 
         has_bs = file_key in bs_keys
         has_mp = file_key in mp_keys
@@ -71,6 +75,7 @@ def main() -> None:
             {
                 "file_key": file_key,
                 "file_path": file_path,
+                "year": year,
                 "doy": doy,
                 "has_bs": has_bs,
                 "has_mp": has_mp,
@@ -78,11 +83,11 @@ def main() -> None:
                 "has_sc": has_sc,
                 "exclude": exclude,
                 "label_type": get_label_type(has_bs, has_mp),
-                "split": get_split(doy),
+                "split": get_split(year),
             }
         )
 
-    df = pd.DataFrame(rows).sort_values(["doy", "file_key"]).reset_index(drop=True)
+    df = pd.DataFrame(rows).sort_values(["year", "doy", "file_key"]).reset_index(drop=True)
     os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
     df.to_csv(OUTPUT_CSV, index=False)
 

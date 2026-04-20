@@ -1,5 +1,4 @@
 import os
-
 import numpy as np
 import pandas as pd
 
@@ -14,7 +13,7 @@ WINDOW = 128
 STRIDE_FAR = 16
 STRIDE_NEAR = 4
 NEAR_RADIUS = 75
-
+N_FEATURES = 63
 
 def to_bool(value) -> bool:
     if pd.isna(value):
@@ -50,23 +49,69 @@ def make_windows_adaptive(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.
     return np.asarray(X_out, dtype=np.float32), np.asarray(y_out, dtype=np.uint8)
 
 
+def count_windows_for_file(X: np.ndarray, y: np.ndarray) -> int:
+    """
+    Dry-run of the window loop — counts how many windows a file will produce
+    without storing anything. Used in Pass 1 to pre-allocate disk space.
+    """
+    n = X.shape[0]
+    pos_idx = np.where(y > 0)[0]
+    near = np.zeros(n, dtype=bool)
+    for p in pos_idx:
+        near[max(0, p - NEAR_RADIUS - WINDOW):min(n, p + NEAR_RADIUS + 1)] = True
+
+    count = 0
+    start = 0
+    while start + WINDOW <= n:
+        end = start + WINDOW - 1
+        stride = STRIDE_NEAR if near[end] else STRIDE_FAR
+        count += 1
+        start += stride
+    return count
+
+
 def main() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
-
     df = pd.read_csv(INDEX_CSV)
     df = df.loc[~df["exclude"].apply(to_bool)].reset_index(drop=True)
 
-    splits_X = {"train": [], "val": [], "test": []}
-    splits_y = {"train": [], "val": [], "test": []}
+    # ---- Pass 1: count windows to pre-allocate disk space ----
+    print("Pass 1: counting windows...")
+    split_counts = {"train": 0, "val": 0, "test": 0}
+    for _, row in df.iterrows():
+        x_path = os.path.join(PREPROCESS_DIR, f"{row['file_key']}_X_63.npy")
+        y_path = os.path.join(LABEL_DIR, f"{row['file_key']}_y.npy")
+        if not (os.path.exists(x_path) and os.path.exists(y_path)):
+            continue
+        X = np.load(x_path)
+        y = np.load(y_path)
+        if X.shape[0] != y.shape[0]:
+            continue
+        split_counts[row["split"]] += count_windows_for_file(X, y)
+    print("Window counts:", split_counts)
 
-    processed = 0
-    missing = 0
-    mismatch = 0
+    # ---- Pre-allocate memmaps on disk ----
+    mmap_X, mmap_y = {}, {}
+    for split, count in split_counts.items():
+        mmap_X[split] = np.memmap(
+            os.path.join(OUT_DIR, f"{split}_X.npy"),
+            dtype=np.float32, mode="w+",
+            shape=(count, WINDOW, N_FEATURES),
+        )
+        mmap_y[split] = np.memmap(
+            os.path.join(OUT_DIR, f"{split}_y.npy"),
+            dtype=np.uint8, mode="w+",
+            shape=(count,),
+        )
+
+    # ---- Pass 2: generate and write windows directly to disk ----
+    print("Pass 2: writing windows...")
+    write_idx = {"train": 0, "val": 0, "test": 0}
+    processed, missing, mismatch = 0, 0, 0
 
     for _, row in df.iterrows():
         file_key = row["file_key"]
         split = row["split"]
-
         x_path = os.path.join(PREPROCESS_DIR, f"{file_key}_X_63.npy")
         y_path = os.path.join(LABEL_DIR, f"{file_key}_y.npy")
 
@@ -86,31 +131,25 @@ def main() -> None:
         if len(Xw) == 0:
             continue
 
-        splits_X[split].append(Xw)
-        splits_y[split].append(yw)
+        idx = write_idx[split]
+        n = len(Xw)
+        mmap_X[split][idx:idx + n] = Xw
+        mmap_y[split][idx:idx + n] = yw
+        write_idx[split] += n
         processed += 1
 
         if processed % 100 == 0:
             print(f"Processed {processed} files...")
 
+    # ---- Flush and print stats ----
     for split in ("train", "val", "test"):
-        if splits_X[split]:
-            X_all = np.concatenate(splits_X[split], axis=0)
-            y_all = np.concatenate(splits_y[split], axis=0)
-        else:
-            X_all = np.empty((0, WINDOW, 63), dtype=np.float32)
-            y_all = np.empty((0,), dtype=np.uint8)
-
-        np.save(os.path.join(OUT_DIR, f"{split}_X.npy"), X_all)
-        np.save(os.path.join(OUT_DIR, f"{split}_y.npy"), y_all)
-
+        mmap_X[split].flush()
+        mmap_y[split].flush()
+        y_all = mmap_y[split]
         print(f"\n{split.upper()}:")
-        print("  windows:", X_all.shape[0])
+        print("  windows:", split_counts[split])
         print("  positives:", int((y_all > 0).sum()))
-        print("  positive fraction:", float((y_all > 0).mean()) if len(y_all) else 0.0)
-        if len(y_all):
-            unique, counts = np.unique(y_all, return_counts=True)
-            print("  class counts:", dict(zip(unique.tolist(), counts.tolist())))
+        print("  positive fraction:", float((y_all > 0).mean()) if split_counts[split] else 0.0)
 
     print("\nDone.")
     print("Processed files:", processed)

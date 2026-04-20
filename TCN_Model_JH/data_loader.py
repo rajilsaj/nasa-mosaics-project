@@ -91,12 +91,12 @@ def create_data_loaders(
 
     # ---- Load arrays -------------------------------------------------
     print(f"Loading data from {data_dir}")
-    train_X = np.load(data_dir / "train_X.npy")
-    train_y = np.load(data_dir / "train_y.npy")
-    val_X   = np.load(data_dir / "val_X.npy")
-    val_y   = np.load(data_dir / "val_y.npy")
-    test_X  = np.load(data_dir / "test_X.npy")
-    test_y  = np.load(data_dir / "test_y.npy")
+    train_X = np.load(data_dir / "train_X.npy", mmap_mode="r")
+    train_y = np.load(data_dir / "train_y.npy", mmap_mode="r")
+    val_X   = np.load(data_dir / "val_X.npy", mmap_mode="r")
+    val_y   = np.load(data_dir / "val_y.npy", mmap_mode="r")
+    test_X  = np.load(data_dir / "test_X.npy", mmap_mode="r")
+    test_y  = np.load(data_dir / "test_y.npy", mmap_mode="r")
 
     print(f"Train windows : {len(train_X)}")
     print(f"Val   windows : {len(val_X)}")

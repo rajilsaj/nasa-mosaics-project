@@ -12,8 +12,8 @@ SCALER_PATH = os.path.join(OUT_DIR, "scaler.pkl")
 
 
 def load_split(split: str) -> tuple[np.ndarray, np.ndarray]:
-    X = np.load(os.path.join(IN_DIR, f"{split}_X.npy"))
-    y = np.load(os.path.join(IN_DIR, f"{split}_y.npy"))
+    X = np.load(os.path.join(IN_DIR, f"{split}_X.npy"), mmap_mode="r")
+    y = np.load(os.path.join(IN_DIR, f"{split}_y.npy"), mmap_mode="r")
     return X, y
 
 

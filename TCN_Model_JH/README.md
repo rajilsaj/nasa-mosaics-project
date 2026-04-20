@@ -26,7 +26,7 @@ Each input to the model is a **window** — a short clip of the spectrogram cut 
 | Features per timestep | 63 | One value per ELS energy bin |
 | Batch shape | `(N, 128, 63)` | N windows at once during training |
 | Labels shape | `(N,)` | One label (0 or 1) per window |
-| Label source | Centre timestep | The middle of the window decides the label |
+| Label source | End timestep | The last timestamp of the window decides the label |
 
 The data arrives **already preprocessed**: raw counts have been `log10` compressed (they span many orders of magnitude) and z-score normalised (each energy bin shifted to mean 0, std 1). The model does not normalise anything itself.
 
