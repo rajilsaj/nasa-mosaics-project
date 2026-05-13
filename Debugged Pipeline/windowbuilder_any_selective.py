@@ -9,10 +9,11 @@ LABEL_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\la
 OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\windows_2004"
 # =================
 
-WINDOW = 128                            #was 128
-STRIDE_FAR = 16
-STRIDE_NEAR = 4
-NEAR_RADIUS = 75
+WINDOW = 128
+STRIDE = 16                               #change to 4 later
+STRIDE_FAR = 32
+N_NOISE_BEFORE = 2                       #change to add more noise
+NEAR_RADIUS = 40
 N_FEATURES = 63
 
 def to_bool(value) -> bool:
@@ -22,26 +23,56 @@ def to_bool(value) -> bool:
         return value
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
+def window_label(y_slice: np.ndarray) -> int:
+    # adds the ability to label a window true if any crossing event happens in it
+    return int((y_slice > 0).any())
+
 
 def make_windows_adaptive(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build windows anchored to crossing events.
+
+    Returns X_out shape (N, WINDOW, n_features) and y_out shape (N,).
+    """
     n = X.shape[0]
-    half = WINDOW // 2
     X_out, y_out = [], []
 
-    pos_idx = np.where(y > 0)[0]
+    pos = (y > 0).astype(np.uint8)
+    padded = np.concatenate([[0], pos, [0]])
+    ends   = np.where(np.diff(padded) == -1)[0]
+
+    for event_end in ends:
+        win_start = event_end - WINDOW
+
+        if win_start < 0:
+            continue
+
+        X_out.append(X[win_start:win_start + WINDOW])
+        y_out.append(window_label(y[win_start:win_start + WINDOW]))
+        
+        for i in range(1, N_NOISE_BEFORE + 1):
+            noise_end = win_start - (i-1) * WINDOW
+            noise_start = noise_end - WINDOW
+            if noise_start < 0:
+                break
+            X_out.append(X[noise_start:noise_start + WINDOW])
+            y_out.append(window_label(y[noise_start:noise_start + WINDOW]))
+
     near = np.zeros(n, dtype=bool)
-    for p in pos_idx:
+    for p in np.where(y > 0)[0]:
         lo = max(0, p - NEAR_RADIUS - WINDOW)
         hi = min(n, p + NEAR_RADIUS + 1)
         near[lo:hi] = True
 
     start = 0
     while start + WINDOW <= n:
-        end = start + WINDOW - 1    # uses last timestamp in the window
-        stride = STRIDE_NEAR if near[end] else STRIDE_FAR
-        X_out.append(X[start:start + WINDOW])
-        y_out.append(int(y[end]))
-        start += stride
+        win_end = start + WINDOW - 1    # uses last timestamp in the window
+        lbl = window_label(y[start:start + WINDOW])
+        if near[win_end] and lbl == 0:
+            X_out.append(X[start:start + WINDOW])
+            y_out.append(0)
+
+        start += STRIDE
 
     if len(X_out) == 0:
         return np.empty((0, WINDOW, X.shape[1]), dtype=np.float32), np.empty((0,), dtype=np.uint8)
@@ -55,18 +86,37 @@ def count_windows_for_file(X: np.ndarray, y: np.ndarray) -> int:
     without storing anything. Used in Pass 1 to pre-allocate disk space.
     """
     n = X.shape[0]
-    pos_idx = np.where(y > 0)[0]
+    count = 0
+
+    pos = (y > 0).astype(np.uint8)
+    padded = np.concatenate([[0], pos, [0]])
+    ends = np.where(np.diff(padded) == -1)[0]
+
+    for event_end in ends:
+        win_start = event_end - WINDOW
+        if win_start < 0:
+            continue
+        count += 1
+        
+        for i in range(1, N_NOISE_BEFORE + 1):
+            noise_end = win_start - (i - 1) * WINDOW
+            noise_start = noise_end - WINDOW
+            if noise_start < 0:
+                break
+            count += 1
+
     near = np.zeros(n, dtype=bool)
-    for p in pos_idx:
+    for p in np.where(y > 0)[0]:
         near[max(0, p - NEAR_RADIUS - WINDOW):min(n, p + NEAR_RADIUS + 1)] = True
 
-    count = 0
+    
     start = 0
     while start + WINDOW <= n:
-        end = start + WINDOW - 1
-        stride = STRIDE_NEAR if near[end] else STRIDE_FAR
-        count += 1
-        start += stride
+        win_end = start + WINDOW - 1
+        lbl = window_label(y[start:start + WINDOW])
+        if lbl == 0 and near[win_end]:
+            count += 1
+        start += STRIDE
     return count
 
 
@@ -90,19 +140,8 @@ def main() -> None:
         split_counts[row["split"]] += count_windows_for_file(X, y)
     print("Window counts:", split_counts)
 
-    # ---- Pre-allocate memmaps on disk ----
-    mmap_X, mmap_y = {}, {}
-    for split, count in split_counts.items():
-        mmap_X[split] = np.memmap(
-            os.path.join(OUT_DIR, f"{split}_X.npy"),
-            dtype=np.float32, mode="w+",
-            shape=(count, WINDOW, N_FEATURES),
-        )
-        mmap_y[split] = np.memmap(
-            os.path.join(OUT_DIR, f"{split}_y.npy"),
-            dtype=np.uint8, mode="w+",
-            shape=(count,),
-        )
+    collected_X = {"train": [], "val": [], "test": []}
+    collected_y = {"train": [], "val": [], "test": []}
 
     # ---- Pass 2: generate and write windows directly to disk ----
     print("Pass 2: writing windows...")
@@ -131,25 +170,30 @@ def main() -> None:
         if len(Xw) == 0:
             continue
 
-        idx = write_idx[split]
-        n = len(Xw)
-        mmap_X[split][idx:idx + n] = Xw
-        mmap_y[split][idx:idx + n] = yw
-        write_idx[split] += n
+        collected_X[split].append(Xw)
+        collected_y[split].append(yw)
         processed += 1
 
         if processed % 100 == 0:
             print(f"Processed {processed} files...")
 
-    # ---- Flush and print stats ----
+    # ---- Save cleanly with np.save ----
+    print("Saving arrays...")
     for split in ("train", "val", "test"):
-        mmap_X[split].flush()
-        mmap_y[split].flush()
-        y_all = mmap_y[split]
+        if len(collected_X[split]) == 0:
+            print(f"WARNING: no windows collected for {split}")
+            continue
+
+        X_all = np.concatenate(collected_X[split], axis=0)
+        y_all = np.concatenate(collected_y[split], axis=0)
+
+        np.save(os.path.join(OUT_DIR, f"{split}_X.npy"), X_all)
+        np.save(os.path.join(OUT_DIR, f"{split}_y.npy"), y_all)
+
         print(f"\n{split.upper()}:")
-        print("  windows:", split_counts[split])
+        print("  windows:", len(X_all))
         print("  positives:", int((y_all > 0).sum()))
-        print("  positive fraction:", float((y_all > 0).mean()) if split_counts[split] else 0.0)
+        print("  positive fraction:", float((y_all > 0).mean()) if len(y_all) else 0.0)
 
     print("\nDone.")
     print("Processed files:", processed)

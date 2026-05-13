@@ -3,6 +3,7 @@ from glob import glob
 from pathlib import Path
 
 import pandas as pd
+import numpy.lib.format as npy_fmt
 
 # ===== PATHS =====
 ELS_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\2004"
