@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, precision_recall_curve, auc
 from sklearn.metrics import confusion_matrix
 
+THRESHOLD = 0.4
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,8 @@ def run_epoch(
                 optimizer.step()
 
             total_loss += loss.item()
-            preds_binary = (torch.sigmoid(preds_seq) > 0.3).long().cpu().numpy()   #was 0.5
+            threshold = 0.4
+            preds_binary = (torch.sigmoid(preds_seq) > THRESHOLD).long().cpu().numpy()   #was 0.5
             probs_np = torch.sigmoid(preds_seq).detach().cpu().numpy()
             all_probs.append(probs_np)
             all_preds.append(preds_binary)
@@ -197,7 +199,7 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    plot_dir = Path("home/jhuss/nasa-mosaics-project/data/plots")
+    plot_dir = Path("/home/jhuss/nasa-mosaics-project/data/plots")
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Data -------------------------------------------------------------
@@ -299,6 +301,8 @@ def main():
     
     plot_calibration(test_labels, test_probs, plot_dir)
     roc_auc, pr_auc = plot_roc_and_pr(test_labels, test_probs, plot_dir)
+
+    cm = confusion_matrix(test_labels, (test_probs > THRESHOLD).astype(int))
     
     with open(output_dir / "test_results.txt", "w") as f:
         f.write("=== Test Results ===\n")
@@ -313,8 +317,6 @@ def main():
         f.write(f"  FN: {cm[1,0]}  TP: {cm[1,1]}\n")
         f.write(f"\nTraining args: {vars(args)}\n")
     print("Saved test results to:", output_dir / "test_results.txt")
-    
-    cm = confusion_matrix(test_labels, (test_probs > 0.3).astype(int))
     print("\nConfusion matrix (test set):")
     print(f"  True  negatives : {cm[0,0]:>6}   False positives : {cm[0,1]:>6}")
     print(f"  False negatives : {cm[1,0]:>6}   True  positives : {cm[1,1]:>6}")
