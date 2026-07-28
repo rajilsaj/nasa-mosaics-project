@@ -6,10 +6,10 @@ import pandas as pd
 import yaml
 
 # ===== PATHS =====
-INDEX_CSV = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\dataset_index_2004.csv"
-LABEL_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\zenodo-3946033\crossings\labels"
-PREPROCESS_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\preprocess"
-OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\labels_2004_2"
+INDEX_CSV = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/dataset_index_2004-2012.csv"
+LABEL_DIR = r"/home/MOSIACS_Share/labels"
+PREPROCESS_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/preprocess_datasetB"
+OUT_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/labels_B"
 # =================
 
 WINDOW_MINUTES = 4

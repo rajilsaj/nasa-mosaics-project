@@ -4,7 +4,7 @@ import joblib
 import numpy as np
 
 # ===== PATHS =====
-DATA_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\windows_2004\scaled"
+DATA_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/windows_2004-2012_v2_B_2/scaled"
 TRAIN_Y = os.path.join(DATA_DIR, "train_y.npy")
 SAVE_PATH = os.path.join(DATA_DIR, "class_weights.pkl")
 # =================

@@ -4,10 +4,10 @@ import numpy as np
 import pandas as pd
 
 # ===== PATHS =====
-INDEX_CSV = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\dataset_index_2004.csv"
-PREPROCESS_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\preprocess"
-LABEL_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\labels_2004_2"
-OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\windows_2004"
+INDEX_CSV = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/dataset_index_2004-2012.csv"
+PREPROCESS_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/preprocess"
+LABEL_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/labels"
+OUT_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/windows_2004-2012"
 # =================
 
 WINDOW = 128
@@ -32,16 +32,16 @@ def make_windows_adaptive(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.
     pos_idx = np.where(y > 0)[0]
     near = np.zeros(n, dtype=bool)
     for p in pos_idx:
-        lo = max(0, p - NEAR_RADIUS - WINDOW)
+        lo = max(0, p - NEAR_RADIUS)
         hi = min(n, p + NEAR_RADIUS + 1)
         near[lo:hi] = True
 
     start = 0
     while start + WINDOW <= n:
-        end = start + WINDOW - 1    # uses last timestamp in the window
-        stride = STRIDE_NEAR if near[end] else STRIDE_FAR
+        center = start + half
+        stride = STRIDE_NEAR if near[center] else STRIDE_FAR
         X_out.append(X[start:start + WINDOW])
-        y_out.append(int(y[end]))
+        y_out.append(int(y[center]))
         start += stride
 
     if len(X_out) == 0:

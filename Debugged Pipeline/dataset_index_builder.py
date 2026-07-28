@@ -6,9 +6,9 @@ import pandas as pd
 import numpy.lib.format as npy_fmt
 
 # ===== PATHS =====
-ELS_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\2004"
-BASE_LABEL_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\data\zenodo-3946033\crossings\labels"
-OUTPUT_CSV = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\dataset_index_2004.csv"
+ELS_DIR = r"/home/MOSIACS_Share/cassini_caps_els"
+BASE_LABEL_DIR = r"/home/MOSIACS_Share/labels"
+OUTPUT_CSV = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/dataset_index_2004-2012.csv"
 # =================
 
 BS_DIR = os.path.join(BASE_LABEL_DIR, "bs", "all")

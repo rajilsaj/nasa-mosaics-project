@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 
 # ===== PATHS =====
-INDEX_CSV = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\dataset_index_2004.csv"
-OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\preprocess"
+INDEX_CSV = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/dataset_index_2004-2012.csv"
+OUT_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/preprocess"
 # =================
 
 ANODE_REDUCE = "sum"  # "sum" or "mean"

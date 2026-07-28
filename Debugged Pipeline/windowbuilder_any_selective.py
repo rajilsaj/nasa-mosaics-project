@@ -3,17 +3,17 @@ import numpy as np
 import pandas as pd
 
 # ===== PATHS =====
-INDEX_CSV = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\dataset_index_2004.csv"
-PREPROCESS_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\preprocess"
-LABEL_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\labels_2004_2"
-OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\windows_2004"
+INDEX_CSV = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/dataset_index_2004-2012.csv"
+PREPROCESS_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/preprocess_datasetB"
+LABEL_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/labels_B"
+OUT_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/windows_2004-2012_v2_B"
 # =================
 
 WINDOW = 128
-STRIDE = 16                               #change to 4 later
+STRIDE = 16                               
 STRIDE_FAR = 32
-N_NOISE_BEFORE = 2                       #change to add more noise
-NEAR_RADIUS = 40
+N_NOISE_BEFORE = 8                        #was 2
+NEAR_RADIUS = 64                          #was 40
 N_FEATURES = 63
 
 def to_bool(value) -> bool:

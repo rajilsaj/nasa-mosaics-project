@@ -75,7 +75,7 @@ def create_data_loaders(
     data_dir: Path,
     batch_size:  int = 32,
     num_workers: int = 0,
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
+) -> Tuple[DataLoader, DataLoader, DataLoader, float]:
     """
     Load pre-built window arrays and return train / val / test DataLoaders.
 
@@ -129,4 +129,5 @@ def create_data_loaders(
         DataLoader(train_ds, shuffle=True,  **loader_kwargs),
         DataLoader(val_ds,   shuffle=False, **loader_kwargs),
         DataLoader(test_ds,  shuffle=False, **loader_kwargs),
+        raw_weight,
     )

@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Dict
-import joblib
+#import joblib
 
 import numpy as np
 import torch
@@ -23,8 +23,19 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, precision_recall_curve, auc
 from sklearn.metrics import confusion_matrix
 
-THRESHOLD = 0.4
 
+# ---------------------------------------------------------------------------
+# Reproducibility
+#----------------------------------------------------------------------------
+
+SEED = 42
+import random
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark     = False
+THRESHOLD = 0.42   #was 4.2
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -82,7 +93,6 @@ def run_epoch(
                 optimizer.step()
 
             total_loss += loss.item()
-            threshold = 0.4
             preds_binary = (torch.sigmoid(preds_seq) > THRESHOLD).long().cpu().numpy()   #was 0.5
             probs_np = torch.sigmoid(preds_seq).detach().cpu().numpy()
             all_probs.append(probs_np)
@@ -156,6 +166,44 @@ def plot_roc_and_pr(y_true: np.ndarray, y_prob: np.ndarray, output_dir: Path):
     print("Saved ROC and PR curves to:", output_dir / "roc_pr_curves.png")
     
     return roc_auc, pr_auc
+    
+def plot_learning_curve(history: dict, output_dir: Path):
+    """
+    Train Vs. Validation loss and F1 one point per epoch.
+    Reads from history
+    """
+    train_loss = [m["loss"] for m in history["train"]]
+    val_loss   = [m["loss"] for m in history["val"]]
+    train_f1   = [m["f1"]   for m in history["train"]]
+    val_f1     = [m["f1"]   for m in history["val"]]
+    epochs     = range(1, len(train_loss) + 1)
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    ax1.plot(epochs, train_loss, label="Train")
+    ax1.plot(epochs, val_loss,   label="Validation")
+    ax1.set_xlabel("Epoch"); ax1.set_ylabel("Loss")
+    ax1.set_title("Loss Curve"); ax1.legend()
+    
+    ax2.plot(epochs, train_f1, label="Train")
+    ax2.plot(epochs, val_f1,   label="Validation")
+    ax2.set_xlabel("Epoch"); ax2.set_ylabel("F1")
+    ax2.set_title("F1 Curve"); ax2.legend()
+
+    plt.tight_layout()
+    plt.savefig(output_dir / "learning_curve.png", dpi=150)
+    plt.close()
+    print("Saved learning curve to:", output_dir / "learning_curve.png")
+    
+def find_best_threshold(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+    """
+    Reuses the same precision_recall_curve() call as plot_roc_and_pr — 
+    no re-running the model. Picks the threshold that maximizes F1.
+    """
+    prec, rec, thresholds = precision_recall_curve(y_true, y_prob)
+    f1_scores = 2 * prec * rec / (prec + rec + 1e-8)
+    best_idx  = np.argmax(f1_scores[:-1])   # last point has no matching threshold
+    return float(thresholds[best_idx])
 
 # ---------------------------------------------------------------------------
 # Main
@@ -182,8 +230,8 @@ def main():
     parser.add_argument("--lr",         type=float, default=1e-3)
 
     # ---- Model ----
-    parser.add_argument("--dropout",      type=float, default=0.2)
-    parser.add_argument("--num-channels", type=int, nargs="+", default=[64, 128, 256, 128])
+    parser.add_argument("--dropout",      type=float, default=0.0)
+    parser.add_argument("--num-channels", type=int, nargs="+", default=[32, 64, 128, 64, 32]) 
 
     # ---- Misc ----
     parser.add_argument("--device", default="auto")
@@ -203,17 +251,17 @@ def main():
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Data -------------------------------------------------------------
-    train_loader, val_loader, test_loader = create_data_loaders(
+    train_loader, val_loader, test_loader, raw_pos_weight = create_data_loaders(
         data_dir    = Path(args.data_dir),
         batch_size  = args.batch_size,
     )
 
     # ------ Weight from preporcess pipeline loader-------------------------
     # Loads the .pk1 file that is created from the pre preprocess pipeline
-    class_weights = joblib.load(Path(args.data_dir) / "class_weights.pkl")
-    pos_weight_val = min(class_weights[1], 20.0)  # Class 1 = crossing, cap at 50 was 10
+    #class_weights = joblib.load(Path(args.data_dir) / "class_weights.pkl")
+    pos_weight_val = min(raw_pos_weight, 20.0)  # class_weights[1]
 
-    print(f"Loaded class weights: {class_weights}")
+    #print(f"Loaded class weights: {class_weights}")
     print(f"Using pos_weight: {pos_weight_val:.2f}")
 
     train_criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_val]).to(device))
@@ -278,7 +326,17 @@ def main():
                 print(f"Early stopping at epoch {epoch} - no val F1 imporvement for {patience} epochs")
                 break
                 
-    # --- Test evaluation --------------------------------------------------
+    # --- Reload best checkpoint (model may drift past-best during patience) 
+    best_ckpt = torch.load(output_dir / "best_model.pt", map_location=device)
+    model.load_state_dict(best_ckpt["model_state_dict"])
+    print(f"Reloaded best model from epoch {best_ckpt['epoch']} (val F1 {best_f1:.4f})")
+
+    # --- Threshold sweep on validation set (test set stays untouched) ------
+    _, val_labels, val_probs = run_epoch(model, val_loader, eval_criterion, device)
+    best_threshold = find_best_threshold(val_labels, val_probs)
+    print(f"Best threshold from val sweep: {best_threshold:.3f}  (was fixed at {THRESHOLD})")
+
+    # --- Test evaluation ------------------------------------------------------
     test_m, test_labels, test_probs = run_epoch(model, test_loader, eval_criterion, device)
     print(f"\nTest: {test_m}")
 
@@ -299,13 +357,16 @@ def main():
     print(f"\nDone. Checkpoints saved to {output_dir}")
     #--- Metrics output --------------------------------------------------
     
+    plot_learning_curve(history, plot_dir)
     plot_calibration(test_labels, test_probs, plot_dir)
     roc_auc, pr_auc = plot_roc_and_pr(test_labels, test_probs, plot_dir)
+    
+    cm = confusion_matrix(test_labels, (test_probs > best_threshold).astype(int))
 
-    cm = confusion_matrix(test_labels, (test_probs > THRESHOLD).astype(int))
     
     with open(output_dir / "test_results.txt", "w") as f:
         f.write("=== Test Results ===\n")
+        f.write(f"Threshold : {best_threshold:.3f} (swept on validation set)\n")
         f.write(f"Accuracy  : {test_m['accuracy']:.4f}\n")
         f.write(f"Precision : {test_m['precision']:.4f}\n")
         f.write(f"Recall    : {test_m['recall']:.4f}\n")

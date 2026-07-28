@@ -5,8 +5,8 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 # ===== PATHS =====
-IN_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\windows_2004"
-OUT_DIR = r"C:\Users\PC\Documents\GitHub\nasa-mosaics-project\dataset_index\windows_2004\scaled"
+IN_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/windows_2004-2012_v2_B_2"
+OUT_DIR = r"/home/jhuss/nasa-mosaics-project/data/dataset_index/windows_2004-2012_v2_B_2/scaled"
 SCALER_PATH = os.path.join(OUT_DIR, "scaler.pkl")
 # =================
 
@@ -53,4 +53,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
