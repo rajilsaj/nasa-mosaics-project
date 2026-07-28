@@ -31,7 +31,7 @@ def load_model(checkpoint_path: Path, device: torch.device) -> tuple[BowShockTCN
 
     model = BowShockTCN(
         num_energy_bins = saved_args.get("num_energy_bins", 63),
-        num_channels    = saved_args.get("num_channels", [64, 128, 256, 128]),
+        num_channels    = saved_args.get("num_channels", [32, 64, 128, 64, 32]),
         dropout         = saved_args.get("dropout", 0.2),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
