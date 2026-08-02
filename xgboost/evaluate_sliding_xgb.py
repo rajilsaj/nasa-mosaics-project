@@ -96,10 +96,27 @@ def load_sliding_split(path, feature_names):
     """
     Load one sliding-window feature file.
 
+    Labels come in three values: True, False, and 'Omit'. 'Omit' marks
+    ambiguous windows that partially overlap a vortex (detection would
+    come too late to be useful) — the project convention, followed by
+    every original evaluation script, is to EXCLUDE them from scoring.
+
     Returns X (in the model's feature order), y (0/1), and the duration
     of the covered period in hours (from real SCLK timestamps).
     """
     df = pd.read_csv(path)
+
+    # Duration of the whole observed period, BEFORE dropping any windows
+    # (omitted windows still represent observed time).
+    duration_hours = (df['end_sclk'].max() - df['start_sclk'].min()) / 3600.0
+
+    # Drop 'Omit' windows (project convention: label != 'Omit')
+    omit_mask = df['label'].astype(str) == 'Omit'
+    n_omitted = int(omit_mask.sum())
+    if n_omitted:
+        print(f"  Excluding {n_omitted:,} 'Omit' windows "
+              f"(ambiguous vortex overlap) out of {len(df):,}")
+        df = df[~omit_mask]
 
     # Labels may be parsed as bool or as 'True'/'False' strings — map
     # explicitly (str.astype(bool) would mark EVERY non-empty string True)
@@ -119,9 +136,6 @@ def load_sliding_split(path, feature_names):
     if missing:
         raise ValueError(f"{path} is missing feature columns: {missing}")
     X = df[feature_names].values
-
-    # SCLK counts seconds -> observation period in hours
-    duration_hours = (df['end_sclk'].max() - df['start_sclk'].min()) / 3600.0
 
     return X, y, duration_hours
 
