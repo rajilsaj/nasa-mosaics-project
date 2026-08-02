@@ -18,12 +18,12 @@ def load_training_data_and_model():
     print("=" * 70)
     
     # Load raw training windows
-    train_df = pd.read_csv("train_windows.csv")
+    train_df = pd.read_csv("datasets/train_windows.csv")
     print(f"Loaded {len(train_df)} training window samples")
     print(f"Columns: {list(train_df.columns)}")
     
     # Load training features for model predictions
-    train_features_df = pd.read_csv("train_features.csv")
+    train_features_df = pd.read_csv("datasets/train_features.csv")
     print(f"Loaded {len(train_features_df)} training feature vectors")
     
     # Find latest model

@@ -21,17 +21,17 @@ from pathlib import Path
 # CONFIGURATION
 # =============================================================================
 
-TRAIN_WINDOWS = "train_balanced.csv"
-VAL_WINDOWS = "val_balanced.csv"
-TEST_WINDOWS = "test_balanced.csv"
+TRAIN_WINDOWS = "datasets/train_balanced.csv"
+VAL_WINDOWS = "datasets/val_balanced.csv"
+TEST_WINDOWS = "datasets/test_balanced.csv"
 
-TRAIN_SPLIT = "temporal_splits/ml_train.csv"
-VAL_SPLIT = "temporal_splits/ml_val.csv"
-TEST_SPLIT = "temporal_splits/ml_test.csv"
+TRAIN_SPLIT = "datasets/temporal_splits/ml_train.csv"
+VAL_SPLIT = "datasets/temporal_splits/ml_val.csv"
+TEST_SPLIT = "datasets/temporal_splits/ml_test.csv"
 
-TRAIN_FEATURES = "train_features.csv"
-VAL_FEATURES = "val_features.csv"
-TEST_FEATURES = "test_features.csv"
+TRAIN_FEATURES = "datasets/train_features.csv"
+VAL_FEATURES = "datasets/val_features.csv"
+TEST_FEATURES = "datasets/test_features.csv"
 
 # =============================================================================
 # VERIFICATION FUNCTIONS

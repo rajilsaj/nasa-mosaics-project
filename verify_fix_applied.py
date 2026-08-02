@@ -8,8 +8,8 @@ print("VERIFYING FIX: Consistent Global Statistics")
 print("=" * 70)
 
 # Load features
-train = pd.read_csv('train_features.csv')
-val = pd.read_csv('val_features.csv')
+train = pd.read_csv('datasets/train_features.csv')
+val = pd.read_csv('datasets/val_features.csv')
 
 print("\nmin_zscore Feature (uses global statistics):")
 print(f"  Train mean: {train['min_zscore'].mean():.4f}, std: {train['min_zscore'].std():.4f}")

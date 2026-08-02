@@ -40,7 +40,7 @@ class Config:
     RESULTS_DIR = "results"
     
     # Test data
-    TEST_SLIDING_FEATURES = "test_sliding_features.csv"
+    TEST_SLIDING_FEATURES = "datasets/test_sliding_features.csv"
     
     # Training prior (balanced data)
     TRAIN_PRIOR_POS = 0.5  # 1:1 ratio
@@ -102,8 +102,8 @@ def load_model_and_test_data():
     
     # Ensure feature order matches training
     # Try to load training features to get exact order
-    if os.path.exists("train_features.csv"):
-        train_df = pd.read_csv("train_features.csv")
+    if os.path.exists("datasets/train_features.csv"):
+        train_df = pd.read_csv("datasets/train_features.csv")
         train_feature_cols = [col for col in train_df.columns 
                              if col not in ['window_id', 'label', 'event_sclk']]
         # Match order
@@ -366,12 +366,12 @@ def evaluate_precision_improvements(model, X_test, y_test, feature_cols):
     }
     
     # 3. Probability calibration (if we have training data)
-    if os.path.exists("train_features.csv"):
+    if os.path.exists("datasets/train_features.csv"):
         print("\n" + "-" * 70)
         print("3. PROBABILITY CALIBRATION")
         print("-" * 70)
         
-        train_df = pd.read_csv("train_features.csv")
+        train_df = pd.read_csv("datasets/train_features.csv")
         train_df = train_df[train_df['label'] != 'Omit'].copy()
         train_df['label'] = train_df['label'].map({'True': 1, 'False': 0})
         

@@ -223,7 +223,7 @@ def main():
     np.random.seed(args.random_seed)
     
     # File paths
-    ml_file = os.path.join("temporal_splits", f"ml_{args.split}.csv")
+    ml_file = os.path.join("datasets/temporal_splits", f"ml_{args.split}.csv")
     positive_windows_file = f"{args.split}_windows.csv"
     output_file = f"{args.split}_balanced.csv"
     

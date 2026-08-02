@@ -91,10 +91,10 @@ def main():
     print("="*70)
     
     # Generate validation features
-    if os.path.exists("val_sliding_features.csv"):
+    if os.path.exists("datasets/val_sliding_features.csv"):
         val_df = sample_from_sliding_features(
-            "val_sliding_features.csv", 
-            "val_features.csv", 
+            "datasets/val_sliding_features.csv", 
+            "datasets/val_features.csv", 
             num_samples=args.val_samples,
             split_name="val"
         )
@@ -103,10 +103,10 @@ def main():
         return
     
     # Generate test features
-    if os.path.exists("test_sliding_features.csv"):
+    if os.path.exists("datasets/test_sliding_features.csv"):
         test_df = sample_from_sliding_features(
-            "test_sliding_features.csv", 
-            "test_features.csv", 
+            "datasets/test_sliding_features.csv", 
+            "datasets/test_features.csv", 
             num_samples=args.test_samples,
             split_name="test"
         )

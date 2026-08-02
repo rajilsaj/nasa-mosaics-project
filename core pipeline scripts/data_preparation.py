@@ -41,9 +41,9 @@ WINDOW_SIZE = 60        # 60 samples backward from precursor region
 NEGATIVE_SAMPLE_BUFFER = 50  # Buffer around positive events for negative sampling
 
 # File paths
-ML_FILE = "ml_ready_vortex_data.csv"
-JACKSON_FILE = "Jackson_vortex_detections_reformatted_augmented.csv"
-OUTPUT_DIR = "temporal_splits"
+ML_FILE = "datasets/ml_ready_vortex_data.csv"
+JACKSON_FILE = "datasets/Jackson_vortex_detections_reformatted_augmented.csv"
+OUTPUT_DIR = "datasets/temporal_splits"
 
 def parse_arguments():
     """Parse command-line arguments."""

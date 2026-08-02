@@ -96,7 +96,7 @@ def load_model_and_features():
             model = joblib.load(str(model_path))
             
             # Get feature names from training data
-            train_file = script_dir / "train_features.csv"
+            train_file = script_dir / "datasets/train_features.csv"
             if train_file.exists():
                 train_df = pd.read_csv(str(train_file), nrows=1)  # Just read header
                 exclude_cols = ['window_id', 'label', 'event_sclk']

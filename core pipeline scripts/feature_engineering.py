@@ -277,7 +277,7 @@ def main():
     print("\nComputing global statistics for normalization...")
     
     # Try to load training split for consistent statistics
-    train_split_file = os.path.join("temporal_splits", "ml_train.csv")
+    train_split_file = os.path.join("datasets/temporal_splits", "ml_train.csv")
     if os.path.exists(train_split_file):
         print(f"  Loading training split for consistent global statistics...")
         train_split_df = pd.read_csv(train_split_file)

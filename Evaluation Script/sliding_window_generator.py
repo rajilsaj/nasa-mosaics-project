@@ -144,8 +144,8 @@ def main():
     print(f"Verbose: {args.verbose}")
     
     # File paths
-    ml_file = f"temporal_splits/ml_{args.split}.csv"
-    jackson_file = f"temporal_splits/jackson_{args.split}.csv"
+    ml_file = f"datasets/temporal_splits/ml_{args.split}.csv"
+    jackson_file = f"datasets/temporal_splits/jackson_{args.split}.csv"
     output_file = f"{args.split}_sliding_windows_step{args.step_size}.csv"
     
     try:

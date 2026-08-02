@@ -522,7 +522,7 @@ def main():
     
     # Load data and train model
     print("\nLoading training features and training model...")
-    train_features_df = pd.read_csv("train_features.csv")
+    train_features_df = pd.read_csv("datasets/train_features.csv")
     
     feature_cols = [col for col in train_features_df.columns if col not in ['window_id', 'label', 'event_sclk', 'split']]
     X_train = train_features_df[feature_cols].values
@@ -544,7 +544,7 @@ def main():
     
     # Load validation features
     print("\nLoading validation features...")
-    val_features_df = pd.read_csv("val_sliding_features.csv")
+    val_features_df = pd.read_csv("datasets/val_sliding_features.csv")
     
     # Initialize mission threshold tuner
     tuner = MissionThresholdTuner(rf_model, val_features_df)

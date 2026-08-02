@@ -118,7 +118,7 @@ def load_model_and_data():
     from sklearn.ensemble import RandomForestClassifier
     
     # Load training features
-    train_features = pd.read_csv('train_features.csv')
+    train_features = pd.read_csv('datasets/train_features.csv')
     print(f"  Loaded training features: {len(train_features):,} samples")
     
     # Prepare training data
@@ -147,7 +147,7 @@ def load_model_and_data():
     print("  Model training completed!")
     
     # Load validation ML data
-    val_ml = pd.read_csv('temporal_splits/ml_val.csv')
+    val_ml = pd.read_csv('datasets/temporal_splits/ml_val.csv')
     print(f"  Loaded validation data: {len(val_ml):,} samples")
     
     # Get global statistics

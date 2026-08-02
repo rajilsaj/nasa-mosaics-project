@@ -19,12 +19,12 @@ def load_validation_data_and_model():
     print("=" * 70)
     
     # Load validation ML data (continuous time series)
-    val_ml_df = pd.read_csv("temporal_splits/ml_val.csv")
+    val_ml_df = pd.read_csv("datasets/temporal_splits/ml_val.csv")
     print(f"Loaded {len(val_ml_df):,} validation ML samples")
     print(f"SCLK range: {val_ml_df['SCLK'].min():.2f} - {val_ml_df['SCLK'].max():.2f}")
     
     # Load validation sliding features
-    val_features_df = pd.read_csv("val_sliding_features.csv")
+    val_features_df = pd.read_csv("datasets/val_sliding_features.csv")
     print(f"Loaded {len(val_features_df):,} validation sliding window feature vectors")
     
     # Find latest model
@@ -48,7 +48,7 @@ def get_model_predictions(val_features_df, model):
     print("\nGetting model predictions for validation windows...")
     
     # Prepare features (match training feature order)
-    train_df = pd.read_csv("train_features.csv")
+    train_df = pd.read_csv("datasets/train_features.csv")
     train_feature_cols = [col for col in train_df.columns 
                           if col not in ['window_id', 'label', 'event_sclk']]
     

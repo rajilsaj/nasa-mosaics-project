@@ -23,12 +23,12 @@ def load_validation_data_and_model():
     print("=" * 70)
 
     # Load raw validation windows (60-sample precursor windows)
-    val_windows = pd.read_csv("val_windows.csv")
+    val_windows = pd.read_csv("datasets/val_windows.csv")
     print(f"Loaded {len(val_windows):,} validation window samples")
     print(f"Unique windows: {val_windows['window_id'].nunique()}")
 
     # Load validation engineered features
-    val_features = pd.read_csv("val_features.csv")
+    val_features = pd.read_csv("datasets/val_features.csv")
     print(f"Loaded {len(val_features):,} validation feature vectors")
 
     # Find latest improved model
@@ -57,7 +57,7 @@ def add_model_predictions(val_windows, val_features, model):
 
     # Prepare feature matrix matching training order
     train_feature_cols = [
-        col for col in pd.read_csv("train_features.csv").columns
+        col for col in pd.read_csv("datasets/train_features.csv").columns
         if col not in ["window_id", "label", "event_sclk"]
     ]
     feature_cols = [col for col in train_feature_cols if col in val_features.columns]

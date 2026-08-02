@@ -21,7 +21,7 @@ def load_training_data():
     print("Loading training data...")
     
     # Load training features
-    train_features = pd.read_csv('train_features.csv')
+    train_features = pd.read_csv('datasets/train_features.csv')
     print(f"  Loaded {len(train_features):,} training samples")
     
     # Prepare feature columns
@@ -144,7 +144,7 @@ def analyze_training_performance(X_train, y_train, model):
     # Feature importance analysis
     print("\nTop 10 Most Important Features:")
     feature_importance = model.feature_importances_
-    feature_names = [col for col in pd.read_csv('train_features.csv').columns 
+    feature_names = [col for col in pd.read_csv('datasets/train_features.csv').columns 
                     if col not in ['window_id', 'event_sclk', 'label']]
     
     importance_df = pd.DataFrame({

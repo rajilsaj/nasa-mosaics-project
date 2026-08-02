@@ -20,7 +20,7 @@ sns.set_palette("husl")
 def load_training_data():
     """Load and prepare training features."""
     print("Loading training features...")
-    df = pd.read_csv('train_features.csv')
+    df = pd.read_csv('datasets/train_features.csv')
     
     print(f"Training data shape: {df.shape}")
     print(f"Class distribution: {df['label'].value_counts().to_dict()}")

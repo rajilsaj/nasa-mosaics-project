@@ -21,11 +21,11 @@ def load_precomputed_data():
     print("Loading pre-computed data...")
     
     # Load pre-computed validation sliding features
-    val_features = pd.read_csv('val_sliding_features.csv')
+    val_features = pd.read_csv('datasets/val_sliding_features.csv')
     print(f"  Loaded {len(val_features):,} pre-computed sliding window features")
     
     # Load validation ML data for ground truth
-    val_ml = pd.read_csv('temporal_splits/ml_val.csv')
+    val_ml = pd.read_csv('datasets/temporal_splits/ml_val.csv')
     print(f"  Loaded {len(val_ml):,} validation ML samples")
     
     # Try to load saved model first (OPTIMIZATION: Don't re-train!)
@@ -38,7 +38,7 @@ def load_precomputed_data():
         print("  Model loaded from cache!")
     else:
         print("  Training model once and saving...")
-        train_features = pd.read_csv('train_features.csv')
+        train_features = pd.read_csv('datasets/train_features.csv')
         feature_cols = [col for col in train_features.columns 
                        if col not in ['window_id', 'event_sclk', 'label']]
         X_train = train_features[feature_cols].values

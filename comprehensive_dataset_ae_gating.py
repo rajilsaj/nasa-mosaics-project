@@ -42,8 +42,8 @@ class Config:
     # File paths (comprehensive dataset)
     COMPREHENSIVE_DIR = "comprehensive_analysis"
     DATA_DIR = os.path.join(COMPREHENSIVE_DIR, "data")
-    TRAIN_WINDOWS_FILE = os.path.join(DATA_DIR, "windows", "train_windows.csv")
-    TRAIN_FEATURES_FILE = os.path.join(DATA_DIR, "features", "train_balanced.csv")
+    TRAIN_WINDOWS_FILE = os.path.join(DATA_DIR, "windows", "datasets/train_windows.csv")
+    TRAIN_FEATURES_FILE = os.path.join(DATA_DIR, "features", "datasets/train_balanced.csv")
     TRAIN_SPLIT_FILE = os.path.join(DATA_DIR, "splits", "ml_train.csv")  # For extracting negative windows
     TEST_SLIDING_FEATURES = os.path.join(DATA_DIR, "features", "test_sliding_features_step10.csv")
     

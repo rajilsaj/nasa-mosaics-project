@@ -344,7 +344,7 @@ def main():
     """Main threshold calibration pipeline."""
     parser = argparse.ArgumentParser(description='Threshold calibration for Mars vortex detection')
     parser.add_argument('--model_file', type=str, help='Path to trained model file')
-    parser.add_argument('--val_features', type=str, default='val_sliding_features.csv',
+    parser.add_argument('--val_features', type=str, default='datasets/val_sliding_features.csv',
                        help='Validation features CSV file')
     parser.add_argument('--min_recall', type=float, default=0.3,
                        help='Minimum recall requirement')

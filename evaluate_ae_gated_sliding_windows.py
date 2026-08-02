@@ -31,7 +31,7 @@ class Config:
     MODEL_PATTERN = "rf_ae_gated_ml_*.pkl"
     
     # Test data
-    TEST_SLIDING_FEATURES = "test_sliding_features.csv"
+    TEST_SLIDING_FEATURES = "datasets/test_sliding_features.csv"
     
     # Baseline metrics (from sliding window evaluation)
     BASELINE_METRICS = {

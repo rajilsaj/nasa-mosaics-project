@@ -40,10 +40,10 @@ class Config:
     """Configuration for AE gating experiment."""
     
     # File paths
-    TRAIN_FEATURES_FILE = "train_features.csv"
-    VAL_FEATURES_FILE = "val_features.csv"
-    TEST_FEATURES_FILE = "test_features.csv"
-    TRAIN_WINDOWS_FILE = "train_windows.csv"  # For training autoencoder
+    TRAIN_FEATURES_FILE = "datasets/train_features.csv"
+    VAL_FEATURES_FILE = "datasets/val_features.csv"
+    TEST_FEATURES_FILE = "datasets/test_features.csv"
+    TRAIN_WINDOWS_FILE = "datasets/train_windows.csv"  # For training autoencoder
     
     # Output directories
     MODELS_DIR = "models"

@@ -35,7 +35,7 @@ def load_data_and_model():
     
     # Load training features to train model
     print("Loading training features...")
-    train_features_df = pd.read_csv("train_features.csv")
+    train_features_df = pd.read_csv("datasets/train_features.csv")
     
     # Prepare training data
     feature_cols = [col for col in train_features_df.columns if col not in ['window_id', 'label', 'event_sclk', 'split']]
@@ -62,7 +62,7 @@ def load_data_and_model():
     
     # Load validation features
     print("\nLoading validation features...")
-    val_features_df = pd.read_csv("val_sliding_features.csv")
+    val_features_df = pd.read_csv("datasets/val_sliding_features.csv")
     
     # Filter out 'Omit' labels and convert to binary
     valid_df = val_features_df[val_features_df['label'] != 'Omit'].copy()

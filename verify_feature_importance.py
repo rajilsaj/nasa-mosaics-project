@@ -48,8 +48,8 @@ if os.path.exists(importance_file):
             print(f"   ⚠ Extra features: {extra}")
     
     # Check if train_features.csv exists and verify
-    if os.path.exists("train_features.csv"):
-        train_df = pd.read_csv("train_features.csv", nrows=1)
+    if os.path.exists("datasets/train_features.csv"):
+        train_df = pd.read_csv("datasets/train_features.csv", nrows=1)
         exclude_cols = ['window_id', 'event_sclk', 'label']
         train_features = [c for c in train_df.columns if c not in exclude_cols]
         

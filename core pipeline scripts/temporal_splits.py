@@ -21,9 +21,9 @@ from datetime import datetime
 # CONFIGURATION
 # =============================================================================
 
-ML_FILE = "ml_ready_vortex_data.csv"
-JACKSON_FILE = "Jackson_vortex_detections_reformatted_augmented.csv"
-OUTPUT_DIR = "temporal_splits"
+ML_FILE = "datasets/ml_ready_vortex_data.csv"
+JACKSON_FILE = "datasets/Jackson_vortex_detections_reformatted_augmented.csv"
+OUTPUT_DIR = "datasets/temporal_splits"
 
 # Split ratios
 TRAIN_RATIO = 0.70

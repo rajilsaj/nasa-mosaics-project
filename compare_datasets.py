@@ -12,9 +12,9 @@ print("=" * 80)
 df1 = pd.read_csv('comprehensive_filtered_data_optimized.csv')
 
 # Load temporal splits (current pipeline data)
-df_train = pd.read_csv('temporal_splits/ml_train.csv')
-df_val = pd.read_csv('temporal_splits/ml_val.csv')
-df_test = pd.read_csv('temporal_splits/ml_test.csv')
+df_train = pd.read_csv('datasets/temporal_splits/ml_train.csv')
+df_val = pd.read_csv('datasets/temporal_splits/ml_val.csv')
+df_test = pd.read_csv('datasets/temporal_splits/ml_test.csv')
 df2 = pd.concat([df_train, df_val, df_test], ignore_index=True)
 print("Loaded temporal splits (train+val+test) as comparison dataset")
 

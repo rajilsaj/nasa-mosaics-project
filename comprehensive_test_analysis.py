@@ -20,7 +20,7 @@ from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score,
                              recall_score, roc_auc_score, roc_curve)
 
 MODEL_PATH = "models/improved_rf_vortex_detector_20251010_114031.pkl"
-TEST_FEATURES_FILE = "test_sliding_features.csv"
+TEST_FEATURES_FILE = "datasets/test_sliding_features.csv"
 OUTPUT_DIR = "results"
 FIGURES_DIR = "results"
 DEFAULT_THRESHOLDS = [0.45, 0.60, 0.75, 0.90]

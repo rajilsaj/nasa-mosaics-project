@@ -21,8 +21,8 @@ import numpy as np
 import pandas as pd
 
 MODEL_PATH = "models/improved_rf_vortex_detector_20251010_114031.pkl"
-ML_VAL_FILE = "temporal_splits/ml_val.csv"
-SLIDING_FEATURES_FILE = "val_sliding_features.csv"
+ML_VAL_FILE = "datasets/temporal_splits/ml_val.csv"
+SLIDING_FEATURES_FILE = "datasets/val_sliding_features.csv"
 OUTPUT_DIR = "results"
 THRESHOLD_DEFAULT = 0.45
 

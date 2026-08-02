@@ -68,9 +68,9 @@ def load_model_and_data():
     print(f"Model loaded: {model_path}")
     
     # Load features
-    train_df = pd.read_csv("train_features.csv")
-    val_df = pd.read_csv("val_features.csv")
-    test_df = pd.read_csv("test_features.csv")
+    train_df = pd.read_csv("datasets/train_features.csv")
+    val_df = pd.read_csv("datasets/val_features.csv")
+    test_df = pd.read_csv("datasets/test_features.csv")
     
     print(f"Training samples: {len(train_df)}")
     print(f"Validation samples: {len(val_df)}")

@@ -21,7 +21,7 @@ def load_window_data():
     print("Loading window data...")
     
     # Load balanced training data (contains raw window samples)
-    df = pd.read_csv('train_balanced.csv')
+    df = pd.read_csv('datasets/train_balanced.csv')
     print(f"Total window samples: {len(df):,} rows")
     print(f"Unique windows: {df['window_id'].nunique()}")
     print(f"Window size: 60 samples per window")

@@ -27,9 +27,9 @@ warnings.filterwarnings('ignore')
 # =============================================================================
 # Configuration
 # =============================================================================
-VALIDATION_ML_FILE = "temporal_splits/ml_val.csv"
-VALIDATION_SLIDING_FEATURES_FILE = "val_sliding_features.csv"
-TRAIN_FEATURES_FILE = "train_features.csv"
+VALIDATION_ML_FILE = "datasets/temporal_splits/ml_val.csv"
+VALIDATION_SLIDING_FEATURES_FILE = "datasets/val_sliding_features.csv"
+TRAIN_FEATURES_FILE = "datasets/train_features.csv"
 OUTPUT_DIR = "continuous_validation_analysis"
 
 # =============================================================================

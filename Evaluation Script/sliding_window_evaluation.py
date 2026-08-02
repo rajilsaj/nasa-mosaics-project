@@ -320,7 +320,7 @@ def main():
     
     # STEP 1: Load training features (from fixed windows)
     print("\nSTEP 1: Loading training features...")
-    train_features_df = pd.read_csv("train_features.csv")
+    train_features_df = pd.read_csv("datasets/train_features.csv")
     print(f"  Loaded {len(train_features_df):,} training feature vectors")
     
     # STEP 2: Train model ONCE
@@ -329,7 +329,7 @@ def main():
     
     # STEP 3: Load pre-computed validation features
     print("\nSTEP 3: Loading pre-computed validation features...")
-    val_features_df = pd.read_csv("val_sliding_features.csv")
+    val_features_df = pd.read_csv("datasets/val_sliding_features.csv")
     print(f"  Loaded {len(val_features_df):,} validation feature vectors")
     
     # STEP 4: Evaluate on validation
@@ -347,7 +347,7 @@ def main():
     
     # STEP 5: Load pre-computed test features
     print("\nSTEP 5: Loading pre-computed test features...")
-    test_features_df = pd.read_csv("test_sliding_features.csv")
+    test_features_df = pd.read_csv("datasets/test_sliding_features.csv")
     print(f"  Loaded {len(test_features_df):,} test feature vectors")
     
     # STEP 6: Evaluate on test (SAME MODEL, no retraining!)

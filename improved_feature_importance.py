@@ -19,7 +19,7 @@ def load_training_data():
     print("Loading training data...")
     
     # Load training features
-    train_features = pd.read_csv('train_features.csv')
+    train_features = pd.read_csv('datasets/train_features.csv')
     print(f"  Loaded {len(train_features):,} training samples")
     
     # Prepare feature columns

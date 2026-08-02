@@ -33,7 +33,7 @@ def load_model_and_validation_data():
     model = joblib.load(model_path)
     
     # Load validation features
-    val_features_df = pd.read_csv("val_sliding_features.csv")
+    val_features_df = pd.read_csv("datasets/val_sliding_features.csv")
     print(f"Loaded {len(val_features_df)} validation feature vectors")
     
     # Prepare validation data
@@ -44,7 +44,7 @@ def load_model_and_validation_data():
     feature_cols = [col for col in valid_df.columns if col not in ['window_id', 'start_idx', 'end_idx', 'start_sclk', 'end_sclk', 'label']]
     
     # Load training features to get the exact feature order
-    train_df = pd.read_csv("train_features.csv")
+    train_df = pd.read_csv("datasets/train_features.csv")
     train_feature_cols = [col for col in train_df.columns if col not in ['window_id', 'label', 'event_sclk']]
     
     # Ensure validation features match training features
