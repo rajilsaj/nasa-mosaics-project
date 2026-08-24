@@ -150,7 +150,7 @@ class BowShockTCN(nn.Module):
         if num_channels is None:
             # Simpler progression than original [64, 128, 256, 128].
             # Fewer parameters = less capacity to memorise noise = less overfitting.
-            num_channels = [32, 64, 128, 64, 32]
+            num_channels = [32, 64, 128, 64, 32]   
 
         # Build the stack of TemporalBlocks
         layers = []
